@@ -34,7 +34,6 @@ pub enum Message {
     NewLocationGridChanged(String),
     CreateLocationPressed,
     LocationCreated(Result<StationLocation, String>),
-    SessionRetargeted(Result<(), String>),
     SpotEvent(SpotEvent),
     SpotClicked(spot_feed::Spot),
     ToggleSpotsNeededOnly,
@@ -102,12 +101,6 @@ pub enum Message {
     /// border-highlight matching spots.
     AwardsSetTarget(TargetUnit),
     AwardsClearTarget,
-
-    // ---- Sessions drawer ----
-    SessionsRefreshPressed,
-    SessionsRefreshed(Result<Vec<radio_core::OperatingSession>, String>),
-    SessionsEndActivePressed,
-    SessionsEndFinished(Result<(), String>),
 
     // ---- Keyer macros (Station pane) ----
     /// Send arbitrary CW text via the keyer.

@@ -38,7 +38,6 @@ macro_rules! id_type {
 id_type!(QsoId);
 id_type!(OperatorId);
 id_type!(StationLocationId);
-id_type!(OperatingSessionId);
 
 #[cfg(test)]
 mod tests {

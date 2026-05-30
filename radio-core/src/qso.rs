@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::ids::{OperatingSessionId, OperatorId, QsoId, StationLocationId};
+use crate::ids::{OperatorId, QsoId, StationLocationId};
 use crate::value::{Band, Callsign, FieldSource, Mode, PropagationMode};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -22,7 +22,6 @@ pub struct Qso {
 
     pub operator_id: Option<OperatorId>,
     pub station_location_id: Option<StationLocationId>,
-    pub operating_session_id: Option<OperatingSessionId>,
 
     pub station_callsign: Option<Callsign>,
     pub owner_callsign: Option<Callsign>,

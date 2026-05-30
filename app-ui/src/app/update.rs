@@ -9,9 +9,7 @@ use rig_control::{RigHandle, RigSnapshot};
 use spot_feed::{Spot, SpotEvent};
 use wsjtx_bridge::WsjtxMessage;
 
-use super::boot::{
-    create_qso, import_adif_file, insert_location, refresh, retarget_session,
-};
+use super::boot::{create_qso, import_adif_file, insert_location, refresh};
 use super::constants::SPOT_HISTORY_LIMIT;
 use super::helpers::{
     default_freq_for_band, option_from_str, parse_mhz_to_hz, station_call_from_config,
@@ -33,7 +31,6 @@ impl App {
                 self.resolver = Some(bundle.resolver);
                 self.station_locations = bundle.station_locations;
                 self.active_location = bundle.active_location;
-                self.active_session = Some(bundle.active_session);
                 self.spots_active = bundle.spots_active;
                 self.wsjtx_active = bundle.wsjtx_active;
                 self.wsjtx_bind_addr = bundle.wsjtx_bind_addr;
@@ -183,7 +180,7 @@ impl App {
             Message::WsjtxImportFinished(Ok(count)) => {
                 self.wsjtx_imported += count;
                 self.status = Some(format!(
-                    "wsjtx: imported {count} qso (total this session: {})",
+                    "wsjtx: imported {count} qso (total this run: {})",
                     self.wsjtx_imported
                 ));
                 self.refresh_task()
@@ -346,11 +343,6 @@ impl App {
                 self.status = Some(format!("create station error: {e}"));
                 Task::none()
             }
-            Message::SessionRetargeted(Ok(())) => Task::none(),
-            Message::SessionRetargeted(Err(e)) => {
-                tracing::warn!(error = %e, "session retarget failed");
-                Task::none()
-            }
             Message::SpotEvent(SpotEvent::Spot(spot)) => {
                 self.spots.push_front(spot);
                 while self.spots.len() > SPOT_HISTORY_LIMIT {
@@ -496,47 +488,6 @@ impl App {
                 self.awards_drawer.target_unit = None;
                 Task::none()
             }
-            Message::SessionsRefreshPressed => {
-                let Some(repo) = self.station_repo.clone() else {
-                    return Task::none();
-                };
-                self.sessions_drawer.loading = true;
-                Task::perform(
-                    async move {
-                        repo.list_sessions(Some(50))
-                            .await
-                            .map_err(|e| e.to_string())
-                    },
-                    Message::SessionsRefreshed,
-                )
-            }
-            Message::SessionsRefreshed(result) => {
-                self.sessions_drawer.loading = false;
-                match result {
-                    Ok(sessions) => {
-                        self.sessions_drawer.sessions = sessions;
-                        self.sessions_drawer.last_status = None;
-                    }
-                    Err(e) => {
-                        self.sessions_drawer.last_status =
-                            Some(format!("refresh error: {e}"));
-                    }
-                }
-                Task::none()
-            }
-            Message::SessionsEndActivePressed => {
-                let (Some(repo), Some(active)) =
-                    (self.station_repo.clone(), self.active_session)
-                else {
-                    return Task::none();
-                };
-                Task::perform(
-                    async move {
-                        repo.end_session(&active).await.map_err(|e| e.to_string())
-                    },
-                    Message::SessionsEndFinished,
-                )
-            }
             Message::KeyerSendMacro(text) => {
                 let Some(handle) = self.keyer_handle.clone() else {
                     self.status = Some("keyer not connected".into());
@@ -651,18 +602,6 @@ impl App {
                 self.qsl_view.selected.clear();
                 let refresh = self.run_qsl_pending_refresh();
                 Task::batch([refresh, self.refresh_task()])
-            }
-            Message::SessionsEndFinished(result) => {
-                self.sessions_drawer.last_status = Some(match result {
-                    Ok(()) => "Active session ended. Restart slogger to start a fresh one.".into(),
-                    Err(e) => format!("end error: {e}"),
-                });
-                // Treat the local active_session as cleared too; further
-                // QSO logs will go in unstamped until the next boot.
-                self.active_session = None;
-                // Refresh the list so the operator sees the now-closed
-                // session reflected.
-                self.update(Message::SessionsRefreshPressed)
             }
             Message::LogbookBulkFinished { generation, result } => {
                 if generation != self.logbook_search.generation {
@@ -918,7 +857,6 @@ impl App {
             rst_rcvd: option_from_str(&self.rst_rcvd),
             station_callsign,
             station_location_id: self.active_location.as_ref().map(|l| l.id),
-            operating_session_id: self.active_session,
             ..CreateQsoCommand::minimal(call, Utc::now())
         };
 
@@ -951,16 +889,7 @@ impl App {
             return Task::none();
         };
         self.active_location = Some(loc);
-        let Some(repo) = self.station_repo.clone() else {
-            return Task::none();
-        };
-        let Some(session) = self.active_session else {
-            return Task::none();
-        };
-        Task::perform(
-            retarget_session(repo, session, id),
-            Message::SessionRetargeted,
-        )
+        Task::none()
     }
 
     /// Returns the active rig's handle if one is connected.

@@ -24,9 +24,9 @@ impl App {
             return container(text("opening database…")).padding(20).into();
         }
 
-        // Persistent header + view tab bar across all three views; the
-        // view body itself comes from the per-view module.
-        let header = self.header_view();
+        // View tab bar across all three views; the view body itself comes
+        // from the per-view module. A persistent status bar sits at the
+        // bottom of the window (station selector + status messages).
         let tabs = super::views::tab_bar(self.current_view);
         let view_body: Element<'_, Message> = match self.current_view {
             super::views::ViewKind::Operating => super::views::operating::view(self),
@@ -34,7 +34,7 @@ impl App {
             super::views::ViewKind::Logbook => super::views::logbook::view(self),
         };
 
-        let body = column![header, tabs, view_body].spacing(6);
+        let body = column![tabs, view_body, self.status_bar()].spacing(6);
         container(body).padding(10).into()
     }
 
@@ -45,10 +45,6 @@ impl App {
     /// per-pane render helpers are moved across.
     pub(super) fn view_operating_canvas(&self) -> Element<'_, Message> {
         let awards = self.awards_view();
-        let status = match &self.status {
-            Some(s) => text(s.as_str()),
-            None => text(""),
-        };
 
         let grid = PaneGrid::new(&self.panes, |_pane_id, kind, _maximized| {
             let title_bar = TitleBar::new(text(kind.title()).size(13))
@@ -72,10 +68,13 @@ impl App {
         .on_drag(Message::PaneDragged)
         .on_resize(8, Message::PaneResized);
 
-        column![grid, awards, status].spacing(8).into()
+        column![grid, awards].spacing(8).into()
     }
 
-    fn header_view(&self) -> Element<'_, Message> {
+    /// Persistent bottom status bar: the station selector plus the global
+    /// status message line. On first launch (no station_locations yet) it
+    /// also surfaces the inline create-station form so setup is reachable.
+    fn status_bar(&self) -> Element<'_, Message> {
         let station_options: Vec<StationOption> = self
             .station_locations
             .iter()
@@ -84,63 +83,35 @@ impl App {
         let active_option: Option<StationOption> =
             self.active_location.as_ref().map(StationOption::from);
 
-        // Pending sync pills — five small text segments. When a category
-        // has zero pending, we still show it so the layout doesn't shift.
-        let pending_pills = text(format!(
-            "L{} · E{} · C{} · Q{} · H{}",
-            self.pending_lotw,
-            self.pending_eqsl,
-            self.pending_clublog,
-            self.pending_qrz,
-            self.pending_hrdlog,
-        ));
-
-        let update_btn = {
-            let btn = button(text(if self.syncing {
-                "Updating…"
-            } else {
-                "Update services"
-            }));
-            if self.syncing {
-                btn
-            } else {
-                btn.on_press(Message::ServicesUpdatePressed)
-            }
+        // Global status message — surfaced on every view, not just Operating.
+        let status_text: Element<'_, Message> = match &self.status {
+            Some(s) => text(s.as_str()).into(),
+            None => text("").into(),
         };
 
-        // Session label is now a passive readout. Session management
-        // (switch / end) lives in the Logbook view's Sessions pane;
-        // operators reach it via the view tabs.
-        let session_text = match &self.active_location {
-            Some(loc) => format!("Session · {}", loc.name),
-            None => "Session · (no station)".into(),
-        };
-        let session_label: Element<'_, Message> = text(session_text).into();
-
-        let top_row = row![
-            session_label,
-            text("Station:"),
+        let selector_row = row![
+            text("Station:").size(13),
             pick_list(
                 station_options,
                 active_option,
                 Message::StationLocationSelected,
             )
             .placeholder("(none)")
+            .text_size(13)
+            .padding(4)
             .width(Length::Fixed(220.0)),
             Space::new().width(Length::Fill),
-            text("Pending:"),
-            pending_pills,
-            update_btn,
+            status_text,
         ]
         .spacing(10)
         .align_y(iced::Alignment::Center);
 
-        // ADIF import controls moved into the Logbook view's Tools pane.
-
-        // Inline create-station form — visible whenever station_locations
-        // is empty so first-launch operators have an obvious path to set up
-        // a station. Once the first location exists, the form folds away.
-        let create_row: Element<'_, Message> = if self.station_locations.is_empty() {
+        // Compact by default: just the selector row. The inline
+        // create-station form is appended only on first launch (no
+        // station_locations yet) so setup stays reachable; once the first
+        // location exists it folds away and the bar collapses to one line.
+        let mut content = column![selector_row].spacing(6);
+        if self.station_locations.is_empty() {
             let create_btn = {
                 let btn = button(text(if self.creating_location {
                     "Creating…"
@@ -153,29 +124,28 @@ impl App {
                     btn.on_press(Message::CreateLocationPressed)
                 }
             };
-            row![
-                text("New station:"),
-                text_input("Name", &self.new_location_name)
-                    .on_input(Message::NewLocationNameChanged)
-                    .width(Length::Fixed(140.0)),
-                text_input("Call", &self.new_location_call)
-                    .on_input(Message::NewLocationCallsignChanged)
-                    .width(Length::Fixed(110.0)),
-                text_input("Grid", &self.new_location_grid)
-                    .on_input(Message::NewLocationGridChanged)
-                    .width(Length::Fixed(110.0)),
-                create_btn,
-            ]
-            .spacing(8)
-            .align_y(iced::Alignment::Center)
-            .into()
-        } else {
-            text("").into()
-        };
+            content = content.push(
+                row![
+                    text("New station:").size(13),
+                    text_input("Name", &self.new_location_name)
+                        .on_input(Message::NewLocationNameChanged)
+                        .width(Length::Fixed(140.0)),
+                    text_input("Call", &self.new_location_call)
+                        .on_input(Message::NewLocationCallsignChanged)
+                        .width(Length::Fixed(110.0)),
+                    text_input("Grid", &self.new_location_grid)
+                        .on_input(Message::NewLocationGridChanged)
+                        .width(Length::Fixed(110.0)),
+                    create_btn,
+                ]
+                .spacing(8)
+                .align_y(iced::Alignment::Center),
+            );
+        }
 
-        container(column![top_row, create_row].spacing(6))
-            .padding(8)
-            .style(header_style)
+        container(content)
+            .padding(4)
+            .style(status_bar_style)
             .into()
     }
 
@@ -618,7 +588,7 @@ fn target_row_style(theme: &iced::Theme) -> iced::widget::container::Style {
     }
 }
 
-fn header_style(theme: &iced::Theme) -> iced::widget::container::Style {
+fn status_bar_style(theme: &iced::Theme) -> iced::widget::container::Style {
     let pair = theme.extended_palette().primary.weak;
     iced::widget::container::Style {
         background: Some(pair.color.into()),

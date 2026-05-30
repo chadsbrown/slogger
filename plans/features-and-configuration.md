@@ -15,7 +15,7 @@ For the high-level capability summary aimed at UI design, see
 | File | Path | Purpose |
 |---|---|---|
 | Config | `~/.config/slogger/config.toml` | All feature configuration. Created by hand or via `app_config::Config::write_template`. |
-| Database | `~/.local/share/slogger/slogger.sqlite` | Logbook + service state + sessions + station_locations. Auto-created at first launch. |
+| Database | `~/.local/share/slogger/slogger.sqlite` | Logbook + service state + station_locations. Auto-created at first launch. |
 | Country file | `~/.local/share/slogger/cty.dat` | DXCC entity database. Optional; resolver runs in NoOp mode if absent. |
 
 Paths use `dirs::config_dir()` and `dirs::data_local_dir()`, so they
@@ -33,22 +33,24 @@ These run regardless of configuration.
 The `slogger.sqlite` database is auto-created at first launch with
 schema migration `0001_initial.sql` applied. The schema covers QSOs,
 exchange fields, notes, attachments, provenance, station_locations,
-operators, operating_sessions, service accounts + state + sync_jobs,
+operators, service accounts + state + sync_jobs,
 award definitions + progress + credit imports + links.
 
 All writes go through `LogbookService` and the repository traits.
 Writes are awaited synchronously from the UI; no batched commits.
 
-### Operating session
+### Active station location
 
-A new session is started at every boot:
-- Closes any leftover sessions with `ended_at IS NULL` from prior runs
-- Starts a fresh session named "slogger session"
-- Stamps every newly-logged QSO with the session's id
+At boot the first `station_location` (if any exist) becomes the active
+location. Selecting a different location from the header dropdown updates
+it. The active location stamps `station_callsign` and
+`station_location_id` onto every newly-logged QSO; if none exist, QSOs
+are logged location-less until the operator creates one.
 
-If station_locations exist, the first one is the active location and
-gets stamped on the session. If none exist, the session is location-less
-until the operator creates one.
+> An earlier revision wrapped this in a per-boot `operating_session`
+> entity (start/end/retarget, orphan cleanup, a Sessions pane). It was
+> removed — nothing consumed the session id and the active location alone
+> supplies the operating context QSOs need.
 
 ### ADIF I/O
 
@@ -369,15 +371,15 @@ In order:
    warning log.
 3. Load `~/.config/slogger/config.toml`. Missing file = `Config::default()`
    (everything off).
-4. Close orphan operating_sessions (`ended_at IS NULL` from prior runs).
-5. Start a new operating_session.
-6. If `[dxcluster]` configured: spawn dxfeed adapter, stash receiver.
-7. If `[wsjtx].enabled`: bind UDP listener.
-8. For each `[[rig]]`: connect (initial sync), spawn forwarder, store
+4. Load station_locations; the first one (if any) becomes the active
+   location.
+5. If `[dxcluster]` configured: spawn dxfeed adapter, stash receiver.
+6. If `[wsjtx].enabled`: bind UDP listener.
+7. For each `[[rig]]`: connect (initial sync), spawn forwarder, store
    `RigEntry`.
-9. If `[keyer].enabled`: connect, store handle.
-10. If `[so2r].enabled`: connect, store handle.
-11. Render iced window with current state.
+8. If `[keyer].enabled`: connect, store handle.
+9. If `[so2r].enabled`: connect, store handle.
+10. Render iced window with current state.
 
 Failures at any step that targets external hardware/network are logged
 as warnings and the feature stays off. The app launches regardless.

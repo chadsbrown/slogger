@@ -4,9 +4,7 @@ use sqlx::{Row, SqlitePool};
 use uuid::Uuid;
 
 use logbook_domain::{RepoResult, RepositoryError, StationRepository};
-use radio_core::{
-    Callsign, OperatingSession, OperatingSessionId, OperatorId, StationLocation, StationLocationId,
-};
+use radio_core::{Callsign, StationLocation, StationLocationId};
 
 use crate::db::Database;
 
@@ -197,180 +195,11 @@ impl StationRepository for SqliteStationRepository {
             .map_err(map_err)?;
         rows.iter().map(row_to_location).collect()
     }
-
-    async fn start_session(
-        &self,
-        operator_id: Option<&OperatorId>,
-        station_location_id: Option<&StationLocationId>,
-        name: Option<&str>,
-    ) -> RepoResult<OperatingSessionId> {
-        let id = OperatingSessionId::new();
-        let now = fmt_dt(&Utc::now());
-        sqlx::query(
-            r#"
-            INSERT INTO operating_sessions
-                (id, operator_id, station_location_id, started_at, ended_at, name, notes)
-            VALUES (?, ?, ?, ?, NULL, ?, NULL)
-            "#,
-        )
-        .bind(id.as_uuid().to_string())
-        .bind(operator_id.map(|i| i.as_uuid().to_string()))
-        .bind(station_location_id.map(|i| i.as_uuid().to_string()))
-        .bind(&now)
-        .bind(name)
-        .execute(&self.pool)
-        .await
-        .map_err(map_err)?;
-        Ok(id)
-    }
-
-    async fn end_session(&self, id: &OperatingSessionId) -> RepoResult<()> {
-        let now = fmt_dt(&Utc::now());
-        sqlx::query("UPDATE operating_sessions SET ended_at = ? WHERE id = ?")
-            .bind(&now)
-            .bind(id.as_uuid().to_string())
-            .execute(&self.pool)
-            .await
-            .map_err(map_err)?;
-        Ok(())
-    }
-
-    async fn get_session(
-        &self,
-        id: &OperatingSessionId,
-    ) -> RepoResult<Option<OperatingSession>> {
-        let row = sqlx::query("SELECT * FROM operating_sessions WHERE id = ?")
-            .bind(id.as_uuid().to_string())
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(map_err)?;
-        let Some(row) = row else { return Ok(None) };
-
-        let id_s: String = row.try_get("id").map_err(map_err)?;
-        let operator_id: Option<String> = row.try_get("operator_id").map_err(map_err)?;
-        let station_location_id: Option<String> =
-            row.try_get("station_location_id").map_err(map_err)?;
-        let started_at: String = row.try_get("started_at").map_err(map_err)?;
-        let ended_at: Option<String> = row.try_get("ended_at").map_err(map_err)?;
-        let name: Option<String> = row.try_get("name").map_err(map_err)?;
-        let notes: Option<String> = row.try_get("notes").map_err(map_err)?;
-
-        let parse_uuid = |s: &str| {
-            Uuid::parse_str(s).map_err(|e| RepositoryError::Storage(format!("bad uuid: {e}")))
-        };
-        let id_uuid = parse_uuid(&id_s)?;
-
-        Ok(Some(OperatingSession {
-            id: OperatingSessionId::from_uuid(id_uuid),
-            operator_id: operator_id
-                .as_deref()
-                .map(parse_uuid)
-                .transpose()?
-                .map(OperatorId::from_uuid),
-            station_location_id: station_location_id
-                .as_deref()
-                .map(parse_uuid)
-                .transpose()?
-                .map(StationLocationId::from_uuid),
-            started_at: parse_dt(&started_at)?,
-            ended_at: ended_at.as_deref().map(parse_dt).transpose()?,
-            name,
-            notes,
-        }))
-    }
-
-    async fn set_session_station_location(
-        &self,
-        id: &OperatingSessionId,
-        station_location_id: Option<&StationLocationId>,
-    ) -> RepoResult<()> {
-        sqlx::query(
-            "UPDATE operating_sessions SET station_location_id = ? WHERE id = ?",
-        )
-        .bind(station_location_id.map(|i| i.as_uuid().to_string()))
-        .bind(id.as_uuid().to_string())
-        .execute(&self.pool)
-        .await
-        .map_err(map_err)?;
-        Ok(())
-    }
-
-    async fn close_open_sessions(&self) -> RepoResult<usize> {
-        let now = fmt_dt(&Utc::now());
-        let result = sqlx::query(
-            "UPDATE operating_sessions SET ended_at = ? WHERE ended_at IS NULL",
-        )
-        .bind(&now)
-        .execute(&self.pool)
-        .await
-        .map_err(map_err)?;
-        Ok(result.rows_affected() as usize)
-    }
-
-    async fn list_sessions(
-        &self,
-        limit: Option<u32>,
-    ) -> RepoResult<Vec<OperatingSession>> {
-        // Bind the limit as a SQLite LIMIT clause; `None` means no cap,
-        // which we encode as -1 since SQLite's `LIMIT -1` is "no limit".
-        let cap = limit.map(|n| n as i64).unwrap_or(-1);
-        let rows = sqlx::query(
-            r#"
-            SELECT id, operator_id, station_location_id, started_at,
-                   ended_at, name, notes
-            FROM operating_sessions
-            ORDER BY started_at DESC
-            LIMIT ?
-            "#,
-        )
-        .bind(cap)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(map_err)?;
-
-        let parse_uuid = |s: &str| {
-            Uuid::parse_str(s).map_err(|e| RepositoryError::Storage(format!("bad uuid: {e}")))
-        };
-
-        let mut out = Vec::with_capacity(rows.len());
-        for row in rows {
-            let id_s: String = row.try_get("id").map_err(map_err)?;
-            let operator_id: Option<String> =
-                row.try_get("operator_id").map_err(map_err)?;
-            let station_location_id: Option<String> =
-                row.try_get("station_location_id").map_err(map_err)?;
-            let started_at: String = row.try_get("started_at").map_err(map_err)?;
-            let ended_at: Option<String> = row.try_get("ended_at").map_err(map_err)?;
-            let name: Option<String> = row.try_get("name").map_err(map_err)?;
-            let notes: Option<String> = row.try_get("notes").map_err(map_err)?;
-
-            let id_uuid = parse_uuid(&id_s)?;
-            out.push(OperatingSession {
-                id: OperatingSessionId::from_uuid(id_uuid),
-                operator_id: operator_id
-                    .as_deref()
-                    .map(parse_uuid)
-                    .transpose()?
-                    .map(OperatorId::from_uuid),
-                station_location_id: station_location_id
-                    .as_deref()
-                    .map(parse_uuid)
-                    .transpose()?
-                    .map(StationLocationId::from_uuid),
-                started_at: parse_dt(&started_at)?,
-                ended_at: ended_at.as_deref().map(parse_dt).transpose()?,
-                name,
-                notes,
-            });
-        }
-        Ok(out)
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use logbook_domain::StationRepository as _;
 
     async fn fresh_repo() -> SqliteStationRepository {
         let db = Database::open_in_memory().await.unwrap();
@@ -409,56 +238,5 @@ mod tests {
         assert_eq!(fetched.name, "Home");
         assert_eq!(fetched.station_callsign, loc.station_callsign);
         assert_eq!(repo.list_locations().await.unwrap().len(), 1);
-    }
-
-    #[tokio::test]
-    async fn close_open_sessions_handles_orphans_at_boot() {
-        let repo = fresh_repo().await;
-        let loc = sample_location("Home");
-        repo.insert_location(&loc).await.unwrap();
-
-        // Two open sessions (simulating prior crashed-out runs) plus one
-        // already-closed session.
-        let s1 = repo.start_session(None, Some(&loc.id), Some("first")).await.unwrap();
-        let s2 = repo.start_session(None, Some(&loc.id), Some("second")).await.unwrap();
-        let s3 = repo.start_session(None, Some(&loc.id), Some("already closed")).await.unwrap();
-        repo.end_session(&s3).await.unwrap();
-
-        let closed = repo.close_open_sessions().await.unwrap();
-        assert_eq!(closed, 2, "expected to close two open sessions");
-
-        for id in [s1, s2, s3] {
-            let s = repo.get_session(&id).await.unwrap().unwrap();
-            assert!(s.ended_at.is_some(), "session {} should be closed", id);
-        }
-    }
-
-    #[tokio::test]
-    async fn session_lifecycle() {
-        let repo = fresh_repo().await;
-        let loc = sample_location("Home");
-        repo.insert_location(&loc).await.unwrap();
-
-        let session_id = repo
-            .start_session(None, Some(&loc.id), Some("evening run"))
-            .await
-            .unwrap();
-        let s = repo.get_session(&session_id).await.unwrap().unwrap();
-        assert_eq!(s.name.as_deref(), Some("evening run"));
-        assert_eq!(s.station_location_id, Some(loc.id));
-        assert!(s.ended_at.is_none());
-
-        // Mid-session re-target.
-        let other = sample_location("Field");
-        repo.insert_location(&other).await.unwrap();
-        repo.set_session_station_location(&session_id, Some(&other.id))
-            .await
-            .unwrap();
-        let s2 = repo.get_session(&session_id).await.unwrap().unwrap();
-        assert_eq!(s2.station_location_id, Some(other.id));
-
-        repo.end_session(&session_id).await.unwrap();
-        let s3 = repo.get_session(&session_id).await.unwrap().unwrap();
-        assert!(s3.ended_at.is_some());
     }
 }

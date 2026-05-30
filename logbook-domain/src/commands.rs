@@ -1,8 +1,7 @@
 use chrono::{DateTime, Utc};
 
 use radio_core::{
-    Band, Callsign, Mode, OperatingSessionId, OperatorId, PropagationMode, QsoExchangeField,
-    StationLocationId,
+    Band, Callsign, Mode, OperatorId, PropagationMode, QsoExchangeField, StationLocationId,
 };
 
 #[derive(Debug, Clone)]
@@ -21,7 +20,6 @@ pub struct CreateQsoCommand {
 
     pub operator_id: Option<OperatorId>,
     pub station_location_id: Option<StationLocationId>,
-    pub operating_session_id: Option<OperatingSessionId>,
 
     pub station_callsign: Option<Callsign>,
     pub owner_callsign: Option<Callsign>,
@@ -61,7 +59,6 @@ impl CreateQsoCommand {
             rst_rcvd: None,
             operator_id: None,
             station_location_id: None,
-            operating_session_id: None,
             station_callsign: None,
             owner_callsign: None,
             dxcc_id: None,

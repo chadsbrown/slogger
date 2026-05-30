@@ -6,7 +6,7 @@ use iced::Task;
 use iced::widget::pane_grid;
 use keyer_control::{KeyerHandle, KeyerSnapshot};
 use logbook_domain::{AwardsSnapshot, LogbookService, QsoRepository, QsoSummary, StationRepository};
-use radio_core::{Band, Mode, OperatingSessionId, QsoId, StationLocation};
+use radio_core::{Band, Mode, QsoId, StationLocation};
 use so2r_control::{So2rHandle, So2rSnapshot};
 use spot_feed::Spot;
 use station_resolver::Resolver;
@@ -15,7 +15,6 @@ use super::boot::boot_app;
 use super::constants::SPOT_HISTORY_LIMIT;
 use super::drawers::awards::AwardsDrawerState;
 use super::drawers::logbook::LogbookSearchState;
-use super::drawers::sessions::SessionsDrawerState;
 use super::message::{DupeMatch, Message, MultiUpdateSummary};
 use super::panes::{PaneKind, default_pane_configuration};
 use super::types::RigEntry;
@@ -44,7 +43,6 @@ pub struct App {
 
     pub(super) station_locations: Vec<StationLocation>,
     pub(super) active_location: Option<StationLocation>,
-    pub(super) active_session: Option<OperatingSessionId>,
     pub(super) new_location_name: String,
     pub(super) new_location_call: String,
     pub(super) new_location_grid: String,
@@ -127,10 +125,6 @@ pub struct App {
     /// live Spots pane.
     pub(super) awards_drawer: AwardsDrawerState,
 
-    /// Sessions drawer state — most-recently fetched session list + UI
-    /// flags. Refreshed on demand when the drawer opens.
-    pub(super) sessions_drawer: SessionsDrawerState,
-
     /// Which top-level view is currently selected (Operating / QSL /
     /// Logbook). Defaults to Operating on launch. Not persisted to disk
     /// — operators should always land in Operating after a restart.
@@ -175,7 +169,6 @@ impl App {
             editing_qso: None,
             station_locations: vec![],
             active_location: None,
-            active_session: None,
             new_location_name: String::new(),
             new_location_call: String::new(),
             new_location_grid: String::new(),
@@ -212,7 +205,6 @@ impl App {
             layout_save_gen: 0,
             logbook_search: LogbookSearchState::default(),
             awards_drawer: AwardsDrawerState::default(),
-            sessions_drawer: SessionsDrawerState::default(),
             current_view: ViewKind::default(),
             logbook_panes: pane_grid::State::with_configuration(
                 default_logbook_configuration(),

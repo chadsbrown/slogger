@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::ids::{OperatingSessionId, OperatorId, StationLocationId};
+use crate::ids::{OperatorId, StationLocationId};
 use crate::value::Callsign;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -40,15 +40,4 @@ pub struct StationLocation {
 
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OperatingSession {
-    pub id: OperatingSessionId,
-    pub operator_id: Option<OperatorId>,
-    pub station_location_id: Option<StationLocationId>,
-    pub started_at: DateTime<Utc>,
-    pub ended_at: Option<DateTime<Utc>>,
-    pub name: Option<String>,
-    pub notes: Option<String>,
 }

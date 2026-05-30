@@ -30,18 +30,6 @@ CREATE TABLE station_locations (
     updated_at TEXT NOT NULL
 );
 
-CREATE TABLE operating_sessions (
-    id TEXT PRIMARY KEY,
-    operator_id TEXT,
-    station_location_id TEXT,
-    started_at TEXT NOT NULL,
-    ended_at TEXT,
-    name TEXT,
-    notes TEXT,
-    FOREIGN KEY(operator_id) REFERENCES operators(id),
-    FOREIGN KEY(station_location_id) REFERENCES station_locations(id)
-);
-
 CREATE TABLE qsos (
     id TEXT PRIMARY KEY,
 
@@ -59,7 +47,6 @@ CREATE TABLE qsos (
 
     operator_id TEXT,
     station_location_id TEXT,
-    operating_session_id TEXT,
 
     station_callsign TEXT,
     owner_callsign TEXT,
@@ -90,8 +77,7 @@ CREATE TABLE qsos (
     deleted_at TEXT,
 
     FOREIGN KEY(operator_id) REFERENCES operators(id),
-    FOREIGN KEY(station_location_id) REFERENCES station_locations(id),
-    FOREIGN KEY(operating_session_id) REFERENCES operating_sessions(id)
+    FOREIGN KEY(station_location_id) REFERENCES station_locations(id)
 );
 
 CREATE INDEX idx_qsos_call ON qsos(call);

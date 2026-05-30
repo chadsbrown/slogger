@@ -3,7 +3,7 @@ use std::sync::Arc;
 use app_config::{Config, RigConfig as RigConfigToml};
 use keyer_control::KeyerHandle;
 use logbook_domain::{LogbookService, QsoRepository, StationRepository};
-use radio_core::{OperatingSessionId, StationLocation, StationLocationId};
+use radio_core::{StationLocation, StationLocationId};
 use rig_control::{RigHandle, RigSnapshot};
 use so2r_control::So2rHandle;
 use station_resolver::Resolver;
@@ -65,7 +65,6 @@ pub struct BootBundle {
     pub config: Config,
     pub station_locations: Vec<StationLocation>,
     pub active_location: Option<StationLocation>,
-    pub active_session: OperatingSessionId,
     pub spots_active: bool,
     pub wsjtx_active: bool,
     pub wsjtx_bind_addr: Option<String>,

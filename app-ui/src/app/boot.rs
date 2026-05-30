@@ -14,7 +14,7 @@ use logbook_domain::{
     CreateQsoCommand, ImportReport, LogbookService, QsoRepository, QsoSearch,
     StationRepository, parse_adif, snapshot as awards_snapshot,
 };
-use radio_core::{OperatingSessionId, QsoId, StationLocation, StationLocationId};
+use radio_core::{QsoId, StationLocation};
 use rig_control::{RigConfig as RigClientConfig, connect as connect_rig};
 use so2r_control::{So2rConfig as So2rClientConfig, connect as connect_so2r};
 use spot_feed::{ClusterSource as SpotClusterSource, SpotFeedConfig, spawn_spot_feed};
@@ -46,33 +46,14 @@ pub(super) async fn boot_app() -> Result<BootBundle, String> {
 
     let config = Config::load_default().map_err(|e| e.to_string())?;
 
-    // Close any orphaned sessions from prior runs before opening today's.
-    // Without this, every boot leaves a session with ended_at = NULL in
-    // the table; over time that's just clutter. Cheap UPDATE.
-    match station_repo.close_open_sessions().await {
-        Ok(n) if n > 0 => tracing::info!(closed = n, "closed orphaned sessions from prior runs"),
-        Ok(_) => {}
-        Err(e) => tracing::warn!(error = %e, "failed to close stale sessions"),
-    }
-
     let station_locations = station_repo
         .list_locations()
         .await
         .map_err(|e| e.to_string())?;
     let active_location = station_locations.first().cloned();
-
-    let active_session = station_repo
-        .start_session(
-            None,
-            active_location.as_ref().map(|l| &l.id),
-            Some("slogger session"),
-        )
-        .await
-        .map_err(|e| e.to_string())?;
     tracing::info!(
-        session = %active_session,
         location = %active_location.as_ref().map(|l| l.name.as_str()).unwrap_or("(none)"),
-        "started operating session"
+        "active operating location"
     );
 
     let spots_active = if let Some(feed_cfg) = build_spot_feed_config(&config.dxcluster) {
@@ -181,7 +162,6 @@ pub(super) async fn boot_app() -> Result<BootBundle, String> {
         config,
         station_locations,
         active_location,
-        active_session,
         spots_active,
         wsjtx_active,
         wsjtx_bind_addr,
@@ -413,16 +393,6 @@ pub(super) async fn insert_location(
 ) -> Result<StationLocation, String> {
     repo.insert_location(&loc).await.map_err(|e| e.to_string())?;
     Ok(loc)
-}
-
-pub(super) async fn retarget_session(
-    repo: Arc<dyn StationRepository>,
-    session: OperatingSessionId,
-    location: StationLocationId,
-) -> Result<(), String> {
-    repo.set_session_station_location(&session, Some(&location))
-        .await
-        .map_err(|e| e.to_string())
 }
 
 pub(super) async fn import_adif_file(

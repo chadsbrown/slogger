@@ -83,18 +83,6 @@ CREATE TABLE station_locations (
     updated_at TEXT NOT NULL
 );
 
-CREATE TABLE operating_sessions (
-    id TEXT PRIMARY KEY,
-    operator_id TEXT,
-    station_location_id TEXT,
-    started_at TEXT NOT NULL,
-    ended_at TEXT,
-    name TEXT,
-    notes TEXT,
-    FOREIGN KEY(operator_id) REFERENCES operators(id),
-    FOREIGN KEY(station_location_id) REFERENCES station_locations(id)
-);
-
 CREATE TABLE qsos (
     id TEXT PRIMARY KEY,
 
@@ -112,7 +100,6 @@ CREATE TABLE qsos (
 
     operator_id TEXT,
     station_location_id TEXT,
-    operating_session_id TEXT,
 
     station_callsign TEXT,
     owner_callsign TEXT,
@@ -143,8 +130,7 @@ CREATE TABLE qsos (
     deleted_at TEXT,
 
     FOREIGN KEY(operator_id) REFERENCES operators(id),
-    FOREIGN KEY(station_location_id) REFERENCES station_locations(id),
-    FOREIGN KEY(operating_session_id) REFERENCES operating_sessions(id)
+    FOREIGN KEY(station_location_id) REFERENCES station_locations(id)
 );
 
 CREATE INDEX idx_qsos_call ON qsos(call);
@@ -359,9 +345,6 @@ pub struct OperatorId(pub uuid::Uuid);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct StationLocationId(pub uuid::Uuid);
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct OperatingSessionId(pub uuid::Uuid);
 ```
 
 ## Value types
@@ -445,7 +428,6 @@ pub struct Qso {
 
     pub operator_id: Option<OperatorId>,
     pub station_location_id: Option<StationLocationId>,
-    pub operating_session_id: Option<OperatingSessionId>,
 
     pub station_callsign: Option<Callsign>,
     pub owner_callsign: Option<Callsign>,
@@ -631,7 +613,6 @@ pub struct CreateQsoCommand {
 
     pub operator_id: Option<OperatorId>,
     pub station_location_id: Option<StationLocationId>,
-    pub operating_session_id: Option<OperatingSessionId>,
 
     pub exchange_fields: Vec<QsoExchangeField>,
 }
@@ -666,7 +647,6 @@ where
             rst_rcvd: command.rst_rcvd,
             operator_id: command.operator_id,
             station_location_id: command.station_location_id,
-            operating_session_id: command.operating_session_id,
             station_callsign: None,
             owner_callsign: None,
             dxcc_id: None,

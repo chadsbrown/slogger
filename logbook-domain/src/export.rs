@@ -186,7 +186,6 @@ mod tests {
             rst_rcvd: Some("-09".into()),
             operator_id: None,
             station_location_id: None,
-            operating_session_id: None,
             station_callsign: Some(Callsign::parse("K2A").unwrap()),
             owner_callsign: None,
             dxcc_id: Some(291),

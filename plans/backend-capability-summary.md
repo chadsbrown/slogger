@@ -125,12 +125,13 @@ call. Each service fails independently. Per-QSO upload state in
 `qso_service_state` table (`pending`/`uploaded`/`verified`/`failed` +
 confirmation axis).
 
-### Station + session
+### Station locations
 
-- `StationRepository`: insert/update/list station_locations,
-  start/end/get/retarget operating_sessions
-- Boot closes orphan sessions (`ended_at IS NULL`) automatically
+- `StationRepository`: insert/update/list station_locations
 - Active station_location feeds `station_callsign` onto every QSO
+- (The former per-boot `operating_session` entity was removed; the
+  selected station location now carries all the operating context QSOs
+  need.)
 
 ### Resolver / DXCC
 
@@ -187,7 +188,7 @@ Current single-column iced flow is becoming dense. Three plausible shapes:
   visible, draggable panes. Most info-dense; needs careful default layout.
 - **Two-mode** (Operating mode = real-time-driven, Logbook mode =
   retrospective) — different layouts per use case. Operator switches mode
-  at session start.
+  when sitting down to operate.
 
 ### Operator-facing flows
 
@@ -206,9 +207,6 @@ A few high-leverage ones the backend already supports:
 
 ### What's worth designing carefully
 
-- The **operating-session** notion is the architectural centerpiece per
-  the original plan. Most current UI doesn't surface it; you may want
-  session-aware views (e.g., "QSOs from this session", "switch session").
 - **Configuration UX** — every external service is gated by TOML editing.
   A settings panel could wire `app-config` write paths.
 - **Setup vs running** — first-run experience (no cty.dat, no config) vs

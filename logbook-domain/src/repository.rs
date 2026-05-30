@@ -3,8 +3,7 @@ use chrono::{DateTime, Utc};
 use thiserror::Error;
 
 use radio_core::{
-    Band, Callsign, Mode, OperatingSession, OperatingSessionId, OperatorId, Qso, QsoExchangeField,
-    QsoId, StationLocation, StationLocationId,
+    Band, Callsign, Mode, Qso, QsoExchangeField, QsoId, StationLocation, StationLocationId,
 };
 
 use crate::queries::{QsoSearch, QsoSummary};
@@ -258,45 +257,4 @@ pub trait StationRepository: std::fmt::Debug + Send + Sync {
     ) -> RepoResult<Option<StationLocation>>;
 
     async fn list_locations(&self) -> RepoResult<Vec<StationLocation>>;
-
-    /// Open a new operating session — a time-bounded marker stamped onto
-    /// every QSO logged during it. Returns the new session id.
-    async fn start_session(
-        &self,
-        operator_id: Option<&OperatorId>,
-        station_location_id: Option<&StationLocationId>,
-        name: Option<&str>,
-    ) -> RepoResult<OperatingSessionId>;
-
-    /// Close a session. Sets `ended_at = now`. Existing QSOs already
-    /// stamped with this session keep that stamp.
-    async fn end_session(&self, id: &OperatingSessionId) -> RepoResult<()>;
-
-    async fn get_session(
-        &self,
-        id: &OperatingSessionId,
-    ) -> RepoResult<Option<OperatingSession>>;
-
-    /// Update which station_location an in-flight session is associated
-    /// with — when the user changes their selected station mid-session,
-    /// we preserve session continuity rather than fragmenting.
-    async fn set_session_station_location(
-        &self,
-        id: &OperatingSessionId,
-        station_location_id: Option<&StationLocationId>,
-    ) -> RepoResult<()>;
-
-    /// Close any sessions left open from prior runs (`ended_at IS NULL`).
-    /// Called at boot before opening the current run's session, so the
-    /// operating_sessions table doesn't accumulate orphaned rows.
-    /// Returns how many sessions were closed.
-    async fn close_open_sessions(&self) -> RepoResult<usize>;
-
-    /// List recent sessions ordered by `started_at DESC`. `limit` caps
-    /// the result set; `None` returns everything (use only on small
-    /// datasets — UI should pass a bounded limit).
-    async fn list_sessions(
-        &self,
-        limit: Option<u32>,
-    ) -> RepoResult<Vec<OperatingSession>>;
 }

@@ -77,8 +77,8 @@ fn build_filter(query: &QsoSearch) -> (String, Vec<DynBind>) {
     (sql, binds)
 }
 use radio_core::{
-    Band, Callsign, FieldSource, Mode, OperatingSessionId, OperatorId, PropagationMode, Qso,
-    QsoExchangeField, QsoId, StationLocationId,
+    Band, Callsign, FieldSource, Mode, OperatorId, PropagationMode, Qso, QsoExchangeField, QsoId,
+    StationLocationId,
 };
 
 use crate::db::Database;
@@ -167,8 +167,6 @@ fn row_to_qso(row: &sqlx::sqlite::SqliteRow) -> RepoResult<Qso> {
     let operator_id: Option<String> = row.try_get("operator_id").map_err(map_err)?;
     let station_location_id: Option<String> =
         row.try_get("station_location_id").map_err(map_err)?;
-    let operating_session_id: Option<String> =
-        row.try_get("operating_session_id").map_err(map_err)?;
     let station_callsign: Option<String> = row.try_get("station_callsign").map_err(map_err)?;
     let owner_callsign: Option<String> = row.try_get("owner_callsign").map_err(map_err)?;
     let dxcc_id: Option<i64> = row.try_get("dxcc_id").map_err(map_err)?;
@@ -212,11 +210,6 @@ fn row_to_qso(row: &sqlx::sqlite::SqliteRow) -> RepoResult<Qso> {
             .map(parse_uuid)
             .transpose()?
             .map(StationLocationId::from_uuid),
-        operating_session_id: operating_session_id
-            .as_deref()
-            .map(parse_uuid)
-            .transpose()?
-            .map(OperatingSessionId::from_uuid),
         station_callsign: station_callsign.as_deref().map(parse_callsign).transpose()?,
         owner_callsign: owner_callsign.as_deref().map(parse_callsign).transpose()?,
         dxcc_id: dxcc_id.map(|v| v as u16),
@@ -250,7 +243,7 @@ impl QsoRepository for SqliteQsoRepository {
                 id, call, qso_begin, qso_end,
                 band, freq_hz, mode, submode,
                 rst_sent, rst_rcvd,
-                operator_id, station_location_id, operating_session_id,
+                operator_id, station_location_id,
                 station_callsign, owner_callsign,
                 dxcc_id, dxcc_prefix, continent, cq_zone, itu_zone,
                 grid, state, county, province, iota,
@@ -262,7 +255,7 @@ impl QsoRepository for SqliteQsoRepository {
                 ?, ?, ?, ?,
                 ?, ?, ?, ?,
                 ?, ?,
-                ?, ?, ?,
+                ?, ?,
                 ?, ?,
                 ?, ?, ?, ?, ?,
                 ?, ?, ?, ?, ?,
@@ -285,7 +278,6 @@ impl QsoRepository for SqliteQsoRepository {
         .bind(&qso.rst_rcvd)
         .bind(qso.operator_id.map(|id| fmt_id(id.as_uuid())))
         .bind(qso.station_location_id.map(|id| fmt_id(id.as_uuid())))
-        .bind(qso.operating_session_id.map(|id| fmt_id(id.as_uuid())))
         .bind(qso.station_callsign.as_ref().map(|c| c.as_str().to_string()))
         .bind(qso.owner_callsign.as_ref().map(|c| c.as_str().to_string()))
         .bind(qso.dxcc_id.map(|v| v as i64))
@@ -320,7 +312,7 @@ impl QsoRepository for SqliteQsoRepository {
                 call = ?, qso_begin = ?, qso_end = ?,
                 band = ?, freq_hz = ?, mode = ?, submode = ?,
                 rst_sent = ?, rst_rcvd = ?,
-                operator_id = ?, station_location_id = ?, operating_session_id = ?,
+                operator_id = ?, station_location_id = ?,
                 station_callsign = ?, owner_callsign = ?,
                 dxcc_id = ?, dxcc_prefix = ?, continent = ?, cq_zone = ?, itu_zone = ?,
                 grid = ?, state = ?, county = ?, province = ?, iota = ?,
@@ -342,7 +334,6 @@ impl QsoRepository for SqliteQsoRepository {
         .bind(&qso.rst_rcvd)
         .bind(qso.operator_id.map(|id| fmt_id(id.as_uuid())))
         .bind(qso.station_location_id.map(|id| fmt_id(id.as_uuid())))
-        .bind(qso.operating_session_id.map(|id| fmt_id(id.as_uuid())))
         .bind(qso.station_callsign.as_ref().map(|c| c.as_str().to_string()))
         .bind(qso.owner_callsign.as_ref().map(|c| c.as_str().to_string()))
         .bind(qso.dxcc_id.map(|v| v as i64))
@@ -847,7 +838,7 @@ impl QsoRepository for SqliteQsoRepository {
                     id, call, qso_begin, qso_end,
                     band, freq_hz, mode, submode,
                     rst_sent, rst_rcvd,
-                    operator_id, station_location_id, operating_session_id,
+                    operator_id, station_location_id,
                     station_callsign, owner_callsign,
                     dxcc_id, dxcc_prefix, continent, cq_zone, itu_zone,
                     grid, state, county, province, iota,
@@ -859,7 +850,7 @@ impl QsoRepository for SqliteQsoRepository {
                     ?, ?, ?, ?,
                     ?, ?, ?, ?,
                     ?, ?,
-                    ?, ?, ?,
+                    ?, ?,
                     ?, ?,
                     ?, ?, ?, ?, ?,
                     ?, ?, ?, ?, ?,
@@ -882,7 +873,6 @@ impl QsoRepository for SqliteQsoRepository {
             .bind(&q.rst_rcvd)
             .bind(q.operator_id.map(|id| fmt_id(id.as_uuid())))
             .bind(q.station_location_id.map(|id| fmt_id(id.as_uuid())))
-            .bind(q.operating_session_id.map(|id| fmt_id(id.as_uuid())))
             .bind(q.station_callsign.as_ref().map(|c| c.as_str().to_string()))
             .bind(q.owner_callsign.as_ref().map(|c| c.as_str().to_string()))
             .bind(q.dxcc_id.map(|v| v as i64))

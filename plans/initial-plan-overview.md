@@ -41,8 +41,16 @@ In legacy systems:
 
 In this system:
 
-* The **operating session** is the center
+* The **live operating context** is the center — who is operating, from
+  which station/location, on which radios, against what spots and goals
 * QSOs are one type of durable outcome of operating
+
+> Note: an earlier revision modelled this context as a first-class
+> `operating_session` entity (a per-boot, time-bounded row stamped onto
+> every QSO). That entity was removed — it carried no behaviour anything
+> consumed, and the selected **station location** already supplies the
+> operating context that QSOs need. Time-based grouping, if ever wanted,
+> is derivable from QSO timestamps directly.
 
 ---
 
@@ -77,7 +85,7 @@ Real-time context:
 * SO2R/device control (`otrsp`)
 * CW/digital interfaces (`winkey`, etc.)
 * active band/mode/frequency
-* operator session
+* active station location (operator/QTH context)
 * spot interaction (`dxfeed`)
 
 This is the *live brain* of the station.

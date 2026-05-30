@@ -1,7 +1,6 @@
-//! Logbook view — the "general querying" canvas. Hosts six panes
-//! (Search / Grid / Detail / Awards / Sessions / Tools) in one
-//! resizable layout; replaces the previous Logbook / Awards / Sessions
-//! drawer overlays.
+//! Logbook view — the "general querying" canvas. Hosts five panes
+//! (Search / Grid / Detail / Awards / Tools) in one resizable layout;
+//! replaces the previous Logbook / Awards drawer overlays.
 
 use iced::widget::pane_grid::{Axis, Configuration, Content, PaneGrid, TitleBar};
 use iced::widget::{container, text};
@@ -19,7 +18,6 @@ pub enum LogbookPaneKind {
     Grid,
     Detail,
     Awards,
-    Sessions,
     Tools,
 }
 
@@ -30,7 +28,6 @@ impl LogbookPaneKind {
             LogbookPaneKind::Grid => "Results",
             LogbookPaneKind::Detail => "Detail",
             LogbookPaneKind::Awards => "Awards",
-            LogbookPaneKind::Sessions => "Sessions",
             LogbookPaneKind::Tools => "Tools",
         }
     }
@@ -42,9 +39,9 @@ impl LogbookPaneKind {
 /// ┌──────────────────────────┬──────────────────┐
 /// │ Search       (top-left)  │ Awards (top-r)   │
 /// ├──────────────────────────┼──────────────────┤
-/// │ Grid    (center-left)    │ Sessions (mid-r) │
-/// ├──────────────────────────┼──────────────────┤
-/// │ Detail  (bottom-left)    │ Tools  (bot-r)   │
+/// │ Grid    (center-left)    │                  │
+/// ├──────────────────────────┤ Tools  (bot-r)   │
+/// │ Detail  (bottom-left)    │                  │
 /// └──────────────────────────┴──────────────────┘
 /// ```
 pub fn default_logbook_configuration() -> Configuration<LogbookPaneKind> {
@@ -66,12 +63,7 @@ pub fn default_logbook_configuration() -> Configuration<LogbookPaneKind> {
             axis: Axis::Horizontal,
             ratio: 0.45,
             a: Box::new(Configuration::Pane(LogbookPaneKind::Awards)),
-            b: Box::new(Configuration::Split {
-                axis: Axis::Horizontal,
-                ratio: 0.55,
-                a: Box::new(Configuration::Pane(LogbookPaneKind::Sessions)),
-                b: Box::new(Configuration::Pane(LogbookPaneKind::Tools)),
-            }),
+            b: Box::new(Configuration::Pane(LogbookPaneKind::Tools)),
         }),
     }
 }
@@ -86,7 +78,6 @@ pub(in crate::app) fn view(app: &App) -> Element<'_, Message> {
             LogbookPaneKind::Grid => app.view_logbook_grid_pane(),
             LogbookPaneKind::Detail => app.view_logbook_detail_pane(),
             LogbookPaneKind::Awards => app.view_awards_drawer(),
-            LogbookPaneKind::Sessions => app.view_sessions_drawer(),
             LogbookPaneKind::Tools => app.view_logbook_tools_pane(),
         };
         Content::new(container(body).padding(8))
