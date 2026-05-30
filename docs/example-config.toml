@@ -1,0 +1,181 @@
+# slogger configuration — annotated example
+#
+# Place at ~/.config/slogger/config.toml (Linux/macOS) or
+# %APPDATA%\slogger\config.toml (Windows).
+#
+# Every section is optional. A completely absent file launches slogger
+# with all external integrations off and only the manual-logging surface
+# active.
+#
+# See plans/features-and-configuration.md for per-feature details.
+
+# ============================================================
+# [station] — operator default callsign
+# ============================================================
+#
+# Used as a fallback when no station_location is selected (e.g. on first
+# launch, before the operator creates one). Once a station_location is
+# selected in the UI, its station_callsign overrides this.
+
+[station]
+# default_callsign = "W1ABC"
+
+
+# ============================================================
+# [[rig]] — rig control (multi-rig array)
+# ============================================================
+#
+# Write one [[rig]] block per radio. SO2R operators write two.
+# Defaults to NO rigs configured. The first entry is the boot-active rig.
+#
+# Supported vendors: "icom", "yaesu", "kenwood", "elecraft", "flex"
+# Model names are case- and hyphen-insensitive ("IC-7300" = "ic7300").
+
+# [[rig]]
+# enabled = true
+# vendor = "icom"
+# model = "IC-7300"
+# serial_port = "/dev/ttyUSB0"  # required for icom/yaesu/kenwood/elecraft
+# baud_rate = 115200             # optional; vendor default if unset
+# label = "Main"                 # optional; defaults to model name
+
+# Second rig for SO2R (uncomment + fill):
+# [[rig]]
+# enabled = true
+# vendor = "yaesu"
+# model = "FT-DX10"
+# serial_port = "/dev/ttyUSB3"
+# label = "Aux"
+
+# FlexRadio example (TCP instead of serial):
+# [[rig]]
+# enabled = true
+# vendor = "flex"
+# model = "6400"
+# host = "192.168.1.50"          # required for flex; serial_port unused
+# label = "Flex"
+
+
+# ============================================================
+# [keyer] — CW keyer (K1EL WinKeyer / compatible)
+# ============================================================
+
+[keyer]
+# enabled = true
+# serial_port = "/dev/ttyUSB1"
+# initial_wpm = 25                 # 5..50; defaults to 25
+
+
+# ============================================================
+# [so2r] — OTRSP SO2R switch
+# ============================================================
+#
+# Hardware switch (microHAM MK2R, OTRSP Lite, etc.) that routes
+# PTT/key/mic and audio between two rigs in real-time. Requires
+# multi-rig setup ([[rig]] x 2) to be useful.
+
+[so2r]
+# enabled = true
+# serial_port = "/dev/ttyUSB2"
+# initial_tx = 1                   # 1 or 2
+# initial_rx_mode = "stereo"       # "mono" / "stereo" / "reverse_stereo"
+
+
+# ============================================================
+# [wsjtx] — WSJT-X UDP bridge (auto-import logged QSOs)
+# ============================================================
+#
+# Default: enabled = true, bind_addr = 127.0.0.1:2237. The bridge stays
+# idle until WSJT-X actually sends; binding costs nothing.
+#
+# WSJT-X side: File → Settings → Reporting:
+#   UDP Server = 127.0.0.1, port 2237
+#   ☑ Accept UDP requests
+#   ☑ Notify on accepted UDP request
+#   ☑ Logged QSO ADIF
+
+[wsjtx]
+# enabled = true
+# bind_addr = "127.0.0.1:2237"     # use "0.0.0.0:2237" for cross-machine
+
+
+# ============================================================
+# [dxcluster] — DX cluster spot feed
+# ============================================================
+#
+# Connects to one or more cluster nodes; spots flow into the in-app
+# panel with click-to-tune-rig + need-by-band annotation.
+
+[dxcluster]
+# my_callsign = "W1ABC"
+# sources = [
+#     { host = "dxc.kbx.org", port = 7300 },
+#     { host = "n1nr.org",     port = 7300 },
+# ]
+
+# Optional dxfeed filter (JSON file, hand-authored). See dxfeed docs for
+# the schema. Drops spots before they reach the panel.
+# filter_file = "/home/me/.config/slogger/spot-filter.json"
+
+
+# ============================================================
+# Sync services
+# ============================================================
+#
+# All five drive from one Update services button. Each fails
+# independently. The button is a no-op if no service is configured.
+
+# ----------------------------------------
+# [lotw] — ARRL Logbook of the World
+# ----------------------------------------
+#
+# Upload requires TQSL on PATH (or set tqsl_path) plus a station_location
+# defined in tqsl. Fetch verifies (your QSO is at LotW) AND confirms
+# (other station also has matching) in one round-trip.
+
+[lotw]
+# username = "W1ABC"               # LotW website login (NOT the cert)
+# password = "your-lotw-website-password"
+# station_location = "Home"        # TQSL station-location *name*
+# tqsl_path = "/usr/bin/tqsl"      # override only if not on PATH
+
+# ----------------------------------------
+# [eqsl] — eQSL.cc
+# ----------------------------------------
+
+[eqsl]
+# username = "W1ABC"
+# password = "your-eqsl-password"
+
+# ----------------------------------------
+# [clublog] — Club Log (upload only)
+# ----------------------------------------
+#
+# A single Club Log account can host multiple callsigns; the `callsign`
+# field tells Club Log which log this upload belongs to.
+
+[clublog]
+# email = "you@example.com"
+# password = "your-clublog-password"
+# callsign = "W1ABC"
+
+# ----------------------------------------
+# [qrz] — QRZ.com Logbook (upload only)
+# ----------------------------------------
+#
+# api_key is the per-account upload key from your QRZ logbook page.
+# Distinct from QRZ XML subscription credentials.
+
+[qrz]
+# api_key = "ABCD-1234-EFGH-5678"
+
+# ----------------------------------------
+# [hrdlog] — HRDLog (upload only)
+# ----------------------------------------
+#
+# `code` is HRDLog's per-account "upload code" — distinct from the
+# website password. Find it on hrdlog.net under Account → Settings.
+
+[hrdlog]
+# callsign = "W1ABC"
+# code = "your-hrdlog-upload-code"

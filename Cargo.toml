@@ -1,0 +1,78 @@
+[workspace]
+members = [
+    "radio-core",
+    "logbook-domain",
+    "app-persistence",
+    "app-ui",
+    "app-config",
+    "lotw-sync",
+    "eqsl-sync",
+    "clublog-sync",
+    "hrdlog-sync",
+    "keyer-control",
+    "qrz-sync",
+    "rig-control",
+    "so2r-control",
+    "spot-feed",
+    "station-resolver",
+    "wsjtx-bridge",
+]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+authors = ["Chad Brown"]
+
+[workspace.dependencies]
+radio-core = { path = "radio-core" }
+logbook-domain = { path = "logbook-domain" }
+app-persistence = { path = "app-persistence" }
+app-config = { path = "app-config" }
+lotw-sync = { path = "lotw-sync" }
+eqsl-sync = { path = "eqsl-sync" }
+clublog-sync = { path = "clublog-sync" }
+hrdlog-sync = { path = "hrdlog-sync" }
+keyer-control = { path = "keyer-control" }
+qrz-sync = { path = "qrz-sync" }
+rig-control = { path = "rig-control" }
+so2r-control = { path = "so2r-control" }
+spot-feed = { path = "spot-feed" }
+station-resolver = { path = "station-resolver" }
+wsjtx-bridge = { path = "wsjtx-bridge" }
+
+station-data = { git = "https://github.com/chadsbrown/station-data" }
+adif_parser = { git = "https://github.com/chadsbrown/adif_parser" }
+dxfeed = { git = "https://github.com/chadsbrown/dxfeed", features = ["serde"] }
+riglib = { git = "https://github.com/chadsbrown/riglib", features = ["full"] }
+winkey = { git = "https://github.com/chadsbrown/winkey" }
+otrsp = { git = "https://github.com/chadsbrown/otrsp" }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "multipart"] }
+toml = "0.8"
+tempfile = "3"
+
+anyhow = "1"
+async-trait = "0.1"
+chrono = { version = "0.4", features = ["serde"] }
+dirs = "5"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "sqlite", "chrono", "uuid", "macros", "migrate"] }
+thiserror = "1"
+tokio = { version = "1", features = ["sync", "rt-multi-thread", "macros"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+
+# Local dev overrides for shared crates (mirror clogger pattern). Uncomment to point at a local working copy.
+# [patch."https://github.com/chadsbrown/riglib"]
+# riglib = { path = "../riglib/crates/riglib" }
+# [patch."https://github.com/chadsbrown/winkey"]
+# winkey = { path = "../winkey" }
+# [patch."https://github.com/chadsbrown/otrsp"]
+# otrsp = { path = "../otrsp" }
+# [patch."https://github.com/chadsbrown/dxfeed"]
+# dxfeed = { path = "../dxfeed" }
+# [patch."https://github.com/chadsbrown/station-data"]
+# station-data = { path = "../station-data" }

@@ -1,0 +1,13 @@
+[package]
+name = "station-resolver"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+radio-core.workspace = true
+serde.workspace = true
+station-data.workspace = true
+thiserror.workspace = true
+tracing.workspace = true

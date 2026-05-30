@@ -1,0 +1,17 @@
+[package]
+name = "spot-feed"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+chrono.workspace = true
+dxfeed.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["sync", "rt-multi-thread", "macros"] }
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

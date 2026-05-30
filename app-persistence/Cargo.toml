@@ -1,0 +1,20 @@
+[package]
+name = "app-persistence"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+radio-core.workspace = true
+logbook-domain.workspace = true
+async-trait.workspace = true
+chrono.workspace = true
+sqlx.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+station-resolver.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
