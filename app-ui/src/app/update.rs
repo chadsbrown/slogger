@@ -21,7 +21,7 @@ use super::theme;
 use super::message::{DupeMatch, LogbookSearchResult, Message};
 use super::panels::Panels;
 use super::services::{format_multi_summary, run_services_update};
-use super::spots::build_worked_by_band;
+use super::spots::{SpotSort, build_worked_by_band};
 use super::state::{App, EntryDraft};
 
 impl App {
@@ -422,6 +422,10 @@ impl App {
             Message::SpotClicked(spot) => self.apply_spot(spot),
             Message::ToggleSpotsNeededOnly => {
                 self.spots_needed_only = !self.spots_needed_only;
+                Task::none()
+            }
+            Message::SpotsSortClicked(column) => {
+                self.spots_sort = SpotSort::clicked(self.spots_sort, column);
                 Task::none()
             }
             Message::PaneClicked(_pane) => {

@@ -23,7 +23,7 @@ use crate::app::focus::{
 };
 use crate::app::message::Message;
 use crate::app::panels::{DragMode, PanelKind};
-use crate::app::spots::{SpotStatus, describe_spot, status_label};
+use crate::app::spots::{SpotColumn, SpotStatus, describe_spot, sort_spots, status_label};
 use crate::app::state::App;
 use crate::app::theme::{
     self, LABEL_TEXT, MONO, ROW_TEXT, badge, cell, cell_fill, cell_right, label, muted,
@@ -388,7 +388,7 @@ impl App {
 
         // Drop spots older than the age cutoff so the pane reflects current
         // activity rather than a long backlog.
-        let recent: Vec<_> = self
+        let mut recent: Vec<_> = self
             .spots
             .iter()
             .filter(|s| {
@@ -396,6 +396,7 @@ impl App {
             })
             .map(|s| (s, describe_spot(s, resolver, &self.worked_by_band)))
             .collect();
+        sort_spots(&mut recent, self.spots_sort);
         let total = recent.len();
         let needed = recent
             .iter()
@@ -427,15 +428,53 @@ impl App {
         .spacing(8)
         .align_y(iced::Alignment::Center);
 
+        // Each header is a button: click to sort ascending, again for
+        // descending, a third time to return to the default order.
+        let sort = self.spots_sort;
+        let head = |name: &'static str, column: SpotColumn, width: Length, right: bool| {
+            let arrow = match sort {
+                Some(s) if s.column == column && s.ascending => "▲",
+                Some(s) if s.column == column => "▼",
+                _ => "",
+            };
+            let caption = text(format!("{name}{arrow}"))
+                .size(ROW_TEXT)
+                .font(MONO)
+                .wrapping(text::Wrapping::None)
+                .width(Length::Fill)
+                .align_x(if right {
+                    text::Alignment::Right
+                } else {
+                    text::Alignment::Left
+                });
+            let active = arrow != "";
+            button(caption)
+                .padding(0)
+                .width(width)
+                .on_press(Message::SpotsSortClicked(column))
+                .style(move |theme: &Theme, status| {
+                    let lit = active
+                        || matches!(status, button::Status::Hovered | button::Status::Pressed);
+                    button::Style {
+                        background: None,
+                        text_color: Color {
+                            a: if lit { 1.0 } else { 0.55 },
+                            ..theme.palette().text
+                        },
+                        ..button::Style::default()
+                    }
+                })
+        };
+        let fixed = Length::Fixed;
         let header = table_header(row![
-            cell("", W_STATUS),
-            cell_right("AGE", W_AGE),
-            cell("CALL", W_CALL),
-            cell_right("kHz", W_FREQ),
-            cell("BAND", W_BAND),
-            cell("MODE", W_MODE),
-            cell("ENTITY", W_ENTITY),
-            cell_fill("COMMENT"),
+            head("ST", SpotColumn::Status, fixed(W_STATUS), false),
+            head("AGE", SpotColumn::Age, fixed(W_AGE), true),
+            head("CALL", SpotColumn::Call, fixed(W_CALL), false),
+            head("kHz", SpotColumn::Freq, fixed(W_FREQ), true),
+            head("BAND", SpotColumn::Band, fixed(W_BAND), false),
+            head("MODE", SpotColumn::Mode, fixed(W_MODE), false),
+            head("ENTITY", SpotColumn::Entity, fixed(W_ENTITY), false),
+            head("COMMENT", SpotColumn::Comment, Length::Fill, false),
         ]);
 
         let mut rows = column![].spacing(0);

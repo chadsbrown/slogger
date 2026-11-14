@@ -17,7 +17,11 @@ pub struct Spot {
     pub freq_hz: u64,
     pub mode: Option<String>,
     pub comment: Option<String>,
+    /// When the spot was most recently reported — what "age" counts from.
     pub spotted_at: DateTime<Utc>,
+    /// When the spot first appeared. Unlike `spotted_at` it never changes
+    /// as the spot is re-reported, so it gives a stable display order.
+    pub first_seen: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone)]
@@ -151,6 +155,7 @@ impl SpotTracker {
                             mode: dxmode_to_str(spot_event.spot.mode).map(String::from),
                             comment: spot_event.spot.comment,
                             spotted_at: spot_event.spot.last_seen,
+                            first_seen: spot_event.spot.first_seen,
                         };
                         let previous = self.sent.insert(key, (spot.call.clone(), spot.freq_hz));
                         let mut out = Vec::new();

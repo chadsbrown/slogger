@@ -88,6 +88,9 @@ pub struct App {
     pub(super) spots: VecDeque<Spot>,
     pub(super) spots_status: Option<String>,
     pub(super) spots_needed_only: bool,
+    /// Column sort chosen in the Spots table; `None` is the default
+    /// order (newest spot first, stable under re-reports).
+    pub(super) spots_sort: Option<super::spots::SpotSort>,
     pub(super) wsjtx_active: bool,
     pub(super) wsjtx_bind_addr: Option<String>,
     pub(super) wsjtx_imported: usize,
@@ -208,6 +211,7 @@ impl App {
             spots: VecDeque::with_capacity(SPOT_HISTORY_LIMIT),
             spots_status: None,
             spots_needed_only: false,
+            spots_sort: None,
             wsjtx_active: false,
             wsjtx_bind_addr: None,
             wsjtx_imported: 0,

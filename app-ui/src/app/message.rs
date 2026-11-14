@@ -55,6 +55,8 @@ pub enum Message {
     So2rSnapshotMsg(So2rSnapshot),
     /// Operator picked an SO2R headphone mode: `"mono"` or `"stereo"`.
     So2rRxModeSelected(&'static str),
+    /// A Spots table column header was clicked.
+    SpotsSortClicked(super::spots::SpotColumn),
     PaneClicked(pane_grid::Pane),
     PaneDragged(pane_grid::DragEvent),
     PaneResized(pane_grid::ResizeEvent),
