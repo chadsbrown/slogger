@@ -363,9 +363,13 @@ Example filter (drops everything outside NA + 20m/40m):
 ```json
 {
   "geo": { "dx": { "continent_allow": ["NA"] } },
-  "band": { "allow": ["20m", "40m"] }
+  "rf": { "band_allow": ["B20", "B40"] }
 }
 ```
+
+Unknown keys are ignored without an error, so a misspelt section silently
+filters nothing. A ready-made CW-only filter is in
+`docs/spot-filter-cw.json`.
 
 ---
 
