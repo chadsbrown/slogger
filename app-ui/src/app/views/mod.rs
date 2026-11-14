@@ -13,7 +13,7 @@ pub(super) mod logbook;
 pub(super) mod operating;
 pub(super) mod qsl;
 
-use iced::widget::{Space, button, container, row, text};
+use iced::widget::{button, container, row, text};
 use iced::{Element, Length};
 
 use super::message::Message;
@@ -76,9 +76,5 @@ pub(super) fn tab_bar(current: ViewKind) -> Element<'static, Message> {
             .style(theme::tab_style(*v == current)),
         );
     }
-    let clock = text(chrono::Utc::now().format("%Y-%m-%d  %H:%M:%S UTC").to_string())
-        .size(14)
-        .font(theme::MONO);
-    bar = bar.push(Space::new().width(Length::Fill)).push(clock);
     container(bar).padding([0, 4]).width(Length::Fill).into()
 }

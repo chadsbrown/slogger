@@ -16,7 +16,8 @@ use super::helpers::{
     default_freq_for_band, option_from_str, parse_mhz_to_hz, station_call_from_config,
 };
 use super::focus::focus_call;
-use super::layout::save_layout;
+use super::layout::{SavedUi, save_layout};
+use super::theme;
 use super::message::{DupeMatch, LogbookSearchResult, Message};
 use super::panels::Panels;
 use super::services::{format_multi_summary, run_services_update};
@@ -46,7 +47,13 @@ impl App {
                 self.so2r_handle = bundle.so2r_handle;
                 self.config = Some(bundle.config);
                 if let Some(saved) = bundle.panel_layout {
-                    self.panels = Panels::from_saved(saved);
+                    self.panels = Panels::from_saved(saved.panels);
+                    if let Some(scale) = saved.font_scale {
+                        self.font_scale = scale.clamp(theme::FONT_SCALE_MIN, theme::FONT_SCALE_MAX);
+                    }
+                    if let Some(t) = saved.theme.as_deref().and_then(theme::theme_by_name) {
+                        self.theme = t;
+                    }
                 }
                 // Land with the cursor in the Call field: the operator can
                 // start typing the moment the window appears.
@@ -541,6 +548,13 @@ impl App {
                 Task::none()
             }
             Message::Tick => Task::none(),
+            Message::FontScaleUp => self.set_font_scale(self.font_scale + theme::FONT_SCALE_STEP),
+            Message::FontScaleDown => self.set_font_scale(self.font_scale - theme::FONT_SCALE_STEP),
+            Message::FontScaleReset => self.set_font_scale(1.0),
+            Message::ThemeSelected(t) => {
+                self.theme = t;
+                self.save_panel_layout()
+            }
             Message::FocusNext => iced::widget::operation::focus_next(),
             Message::FocusPrevious => iced::widget::operation::focus_previous(),
             Message::EscapePressed => self.escape(),
@@ -969,8 +983,22 @@ impl App {
     }
 
     /// Persists the current panel arrangement.
+    /// Writes the panel layout, theme and text size to `ui-layout.json`.
     fn save_panel_layout(&self) -> Task<Message> {
-        Task::perform(save_layout(self.panels.to_saved()), |()| Message::LayoutSaveCompleted)
+        let ui = SavedUi {
+            panels: self.panels.to_saved(),
+            font_scale: Some(self.font_scale),
+            theme: Some(self.theme.to_string()),
+        };
+        Task::perform(save_layout(ui), |()| Message::LayoutSaveCompleted)
+    }
+
+    fn set_font_scale(&mut self, scale: f32) -> Task<Message> {
+        // Round to the step so repeated presses don't drift (0.1 is not
+        // exact in binary).
+        let scale = (scale * 10.0).round() / 10.0;
+        self.font_scale = scale.clamp(theme::FONT_SCALE_MIN, theme::FONT_SCALE_MAX);
+        self.save_panel_layout()
     }
 
     /// Schedules a debounced dupe-check for the current (call, band).

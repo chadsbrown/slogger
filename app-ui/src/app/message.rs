@@ -70,6 +70,10 @@ pub enum Message {
     /// variant exists because iced `Task::perform` requires the future's
     /// result to be mapped to a Message.
     LayoutSaveCompleted,
+    FontScaleUp,
+    FontScaleDown,
+    FontScaleReset,
+    ThemeSelected(iced::Theme),
 
     // ---- Operating panels ----
     /// A panel was clicked somewhere inert: bring it to the front.

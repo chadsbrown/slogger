@@ -8,7 +8,7 @@ use rig_control::{RigHandle, RigSnapshot};
 use so2r_control::So2rHandle;
 use station_resolver::Resolver;
 
-use super::panels::Panel;
+use super::layout::SavedUi;
 
 /// Display wrapper for the station picker. iced's pick_list needs ToString
 /// + Clone + PartialEq, and we don't want to leak Display onto the domain
@@ -75,8 +75,8 @@ pub struct BootBundle {
     pub so2r_active: bool,
     pub so2r_status: Option<String>,
     pub so2r_handle: Option<So2rHandle>,
-    /// Saved Operating-panel layout from `ui-layout.json`, if present.
-    /// `None` means the operator hasn't arranged anything yet (or the file
-    /// was unreadable) — the caller keeps the default arrangement.
-    pub panel_layout: Option<Vec<Panel>>,
+    /// Saved panel layout, theme and text size from `ui-layout.json`, if
+    /// present. `None` means nothing has been saved yet (or the file was
+    /// unreadable) — the caller keeps the defaults.
+    pub panel_layout: Option<SavedUi>,
 }

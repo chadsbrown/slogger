@@ -1,9 +1,9 @@
-//! Operating-panel layout persistence.
+//! UI preference persistence.
 //!
 //! The position, size, open/closed state and stacking order of every
-//! Operating panel is written to `~/.local/share/slogger/ui-layout.json`
-//! whenever the operator finishes moving, resizing, opening or closing a
-//! panel, and read back at boot.
+//! Operating panel, plus the chosen theme and text size, are written to
+//! `~/.local/share/slogger/ui-layout.json` whenever the operator changes
+//! one of them, and read back at boot.
 
 use std::path::PathBuf;
 
@@ -20,6 +20,20 @@ struct LayoutFile {
     version: u32,
     /// Back-to-front stacking order.
     panels: Vec<Panel>,
+    /// UI scale factor; absent in files written before it existed.
+    #[serde(default)]
+    font_scale: Option<f32>,
+    /// Theme name as shown in the picker.
+    #[serde(default)]
+    theme: Option<String>,
+}
+
+/// Everything the layout file remembers.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SavedUi {
+    pub panels: Vec<Panel>,
+    pub font_scale: Option<f32>,
+    pub theme: Option<String>,
 }
 
 /// Resolves the on-disk path for the saved layout. Returns None if the
@@ -33,7 +47,7 @@ pub(super) fn layout_path() -> Option<PathBuf> {
 /// by an older build, hand-edited into nonsense) so the caller falls back
 /// to the default arrangement — a bad layout file must never stop the
 /// app from starting.
-pub(super) fn load_layout() -> Option<Vec<Panel>> {
+pub(super) fn load_layout() -> Option<SavedUi> {
     let path = layout_path()?;
     let contents = std::fs::read_to_string(&path).ok()?;
     parse_layout(&contents).or_else(|| {
@@ -42,21 +56,27 @@ pub(super) fn load_layout() -> Option<Vec<Panel>> {
     })
 }
 
-fn parse_layout(contents: &str) -> Option<Vec<Panel>> {
+fn parse_layout(contents: &str) -> Option<SavedUi> {
     let file: LayoutFile = serde_json::from_str(contents).ok()?;
-    (file.version == VERSION).then_some(file.panels)
+    (file.version == VERSION).then_some(SavedUi {
+        panels: file.panels,
+        font_scale: file.font_scale,
+        theme: file.theme,
+    })
 }
 
 /// Best-effort save. Writes pretty JSON for hand-editability. Errors are
 /// logged but not surfaced to the operator — layout persistence is a
 /// nice-to-have, not a correctness requirement.
-pub(super) async fn save_layout(panels: Vec<Panel>) {
+pub(super) async fn save_layout(ui: SavedUi) {
     let Some(path) = layout_path() else {
         return;
     };
     let file = LayoutFile {
         version: VERSION,
-        panels,
+        panels: ui.panels,
+        font_scale: ui.font_scale,
+        theme: ui.theme,
     };
     let json = match serde_json::to_string_pretty(&file) {
         Ok(s) => s,
@@ -86,9 +106,25 @@ mod tests {
         let file = LayoutFile {
             version: VERSION,
             panels: Panels::default().to_saved(),
+            font_scale: Some(1.2),
+            theme: Some("Nord".into()),
         };
         let json = serde_json::to_string_pretty(&file).unwrap();
-        assert_eq!(parse_layout(&json), Some(Panels::default().to_saved()));
+        assert_eq!(
+            parse_layout(&json),
+            Some(SavedUi {
+                panels: Panels::default().to_saved(),
+                font_scale: Some(1.2),
+                theme: Some("Nord".into()),
+            })
+        );
+    }
+
+    #[test]
+    fn a_file_without_theme_or_scale_still_loads() {
+        let saved = parse_layout(r#"{"version":2,"panels":[]}"#).unwrap();
+        assert_eq!(saved.font_scale, None);
+        assert_eq!(saved.theme, None);
     }
 
     #[test]

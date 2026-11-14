@@ -1,7 +1,7 @@
 //! Application shell: the tab bar, the selected view's body, and the
 //! persistent bottom status bar. Per-view content lives in `views/`.
 
-use iced::widget::{Space, button, column, container, pick_list, row, text, text_input};
+use iced::widget::{button, column, container, pick_list, row, text, text_input};
 use iced::{Element, Length};
 
 use super::message::Message;
@@ -15,7 +15,12 @@ pub(super) use super::theme::{pane_content_style, title_bar_style};
 
 impl App {
     pub fn theme(&self) -> iced::Theme {
-        theme::app_theme()
+        self.theme.clone()
+    }
+
+    /// Whole-UI scale factor, driven by the A− / A+ buttons.
+    pub fn scale_factor(&self) -> f32 {
+        self.font_scale
     }
 
     pub fn view(&self) -> Element<'_, Message> {
@@ -39,9 +44,10 @@ impl App {
         container(body).padding(8).into()
     }
 
-    /// Persistent bottom status bar: the station selector plus the global
-    /// status message line. On first launch (no station_locations yet) it
-    /// also surfaces the inline create-station form so setup is reachable.
+    /// Persistent bottom status bar. Left: the station selector and the
+    /// global status message. Centre: the UTC clock. Right: text size and
+    /// theme. On first launch (no station_locations yet) it also surfaces
+    /// the inline create-station form so setup is reachable.
     fn status_bar(&self) -> Element<'_, Message> {
         let station_options: Vec<StationOption> = self
             .station_locations
@@ -51,7 +57,7 @@ impl App {
         let active_option: Option<StationOption> =
             self.active_location.as_ref().map(StationOption::from);
 
-        let selector_row = row![
+        let left = row![
             theme::label("STATION"),
             pick_list(
                 station_options,
@@ -62,10 +68,57 @@ impl App {
             .text_size(13)
             .padding([2, 8])
             .width(Length::Fixed(220.0)),
-            Space::new().width(Length::Fill),
-            text(self.status.as_deref().unwrap_or(""))
-                .size(13)
-                .wrapping(text::Wrapping::None),
+            container(
+                text(self.status.as_deref().unwrap_or(""))
+                    .size(13)
+                    .wrapping(text::Wrapping::None),
+            )
+            .width(Length::Fill)
+            .clip(true),
+        ]
+        .spacing(10)
+        .align_y(iced::Alignment::Center);
+
+        let clock = row![
+            text(chrono::Utc::now().format("%Y-%m-%d  %H:%M:%S").to_string())
+                .size(14)
+                .font(theme::MONO),
+            theme::label("UTC"),
+        ]
+        .spacing(6)
+        .align_y(iced::Alignment::Center);
+
+        let size_button = |caption: &'static str, msg: Message| {
+            button(text(caption).size(13))
+                .padding([2, 8])
+                .on_press(msg)
+                .style(theme::tab_style(false))
+        };
+        let right = row![
+            theme::label(format!("TEXT {:.0}%", self.font_scale * 100.0)),
+            size_button("A−", Message::FontScaleDown),
+            size_button("A+", Message::FontScaleUp),
+            theme::label("THEME"),
+            pick_list(
+                theme::all_themes(),
+                Some(self.theme.clone()),
+                Message::ThemeSelected,
+            )
+            .text_size(13)
+            .padding([2, 8])
+            .width(Length::Fixed(170.0)),
+        ]
+        .spacing(6)
+        .align_y(iced::Alignment::Center);
+
+        // Left and right get equal shares so the clock sits at the true
+        // centre of the window whatever their contents.
+        let selector_row = row![
+            container(left).width(Length::FillPortion(1)),
+            clock,
+            container(right)
+                .width(Length::FillPortion(1))
+                .align_x(iced::alignment::Horizontal::Right),
         ]
         .spacing(10)
         .align_y(iced::Alignment::Center);

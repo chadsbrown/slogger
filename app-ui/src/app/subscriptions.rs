@@ -86,12 +86,15 @@ fn key_event(
         Key::Named(named) if function_key_number(named).is_some() => {
             function_key_number(named).map(Message::FunctionKey)
         }
-        Key::Character(c) if modifiers.control() => {
-            ViewKind::ALL
+        Key::Character(c) if modifiers.control() => match c {
+            "+" | "=" => Some(Message::FontScaleUp),
+            "-" | "_" => Some(Message::FontScaleDown),
+            "0" => Some(Message::FontScaleReset),
+            _ => ViewKind::ALL
                 .iter()
                 .find(|v| v.shortcut_digit() == c)
-                .map(|v| Message::ViewChanged(*v))
-        }
+                .map(|v| Message::ViewChanged(*v)),
+        },
         _ => None,
     }
 }

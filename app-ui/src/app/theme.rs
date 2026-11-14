@@ -34,6 +34,24 @@ pub(super) fn app_theme() -> Theme {
     )
 }
 
+/// Every theme the picker offers: slogger's own first, then iced's
+/// built-ins.
+pub(super) fn all_themes() -> Vec<Theme> {
+    std::iter::once(app_theme())
+        .chain(Theme::ALL.iter().cloned())
+        .collect()
+}
+
+/// Looks a theme up by the name the picker shows (and the layout file
+/// stores).
+pub(super) fn theme_by_name(name: &str) -> Option<Theme> {
+    all_themes().into_iter().find(|t| t.to_string() == name)
+}
+
+pub(super) const FONT_SCALE_MIN: f32 = 0.6;
+pub(super) const FONT_SCALE_MAX: f32 = 2.0;
+pub(super) const FONT_SCALE_STEP: f32 = 0.1;
+
 // ---- text styles ----
 
 /// De-emphasised text: labels, headers, already-worked rows.
@@ -209,7 +227,7 @@ pub(super) fn canvas_style(theme: &Theme) -> container::Style {
     }
 }
 
-/// Quiet strip used for the bottom status bar and the awards readout.
+/// Quiet strip used for the bottom status bar.
 pub(super) fn strip_style(theme: &Theme) -> container::Style {
     let ext = theme.extended_palette();
     container::Style {

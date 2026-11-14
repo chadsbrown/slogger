@@ -14,7 +14,6 @@ use iced::widget::{
     scrollable, stack, text, text_input,
 };
 use iced::{Color, Element, Length, Point, Size, Theme, mouse};
-use logbook_domain::AwardProgress;
 use radio_core::Callsign;
 
 use crate::app::constants::{BANDS, SPOT_MAX_AGE_SECS, modes};
@@ -35,7 +34,7 @@ pub(in crate::app) fn view(app: &App) -> Element<'_, Message> {
     // `responsive` hands us the canvas size, which the panels need to turn
     // their fractional geometry into pixels.
     let canvas = responsive(move |size| app.panel_canvas(size));
-    column![app.panel_bar(), canvas, app.awards_strip()]
+    column![app.panel_bar(), canvas]
         .spacing(6)
         .into()
 }
@@ -319,7 +318,7 @@ impl App {
                 .unwrap_or_else(|| "?".into());
             lines = lines.push(
                 row![
-                    badge("DUPE", theme::app_theme().palette().warning),
+                    badge("DUPE", self.theme.palette().warning),
                     text(format!("worked {} on {band}", dupe.qso_begin.format("%Y-%m-%d")))
                         .size(12)
                         .style(text::warning),
@@ -529,7 +528,7 @@ impl App {
     // ---- Station ----
 
     fn station_pane(&self) -> Element<'_, Message> {
-        let palette = theme::app_theme().palette();
+        let palette = self.theme.palette();
         let off = Color { a: 0.3, ..palette.text };
         let mut col = column![].spacing(8);
 
@@ -635,7 +634,7 @@ impl App {
     /// Shown even without a keyer so the operator can see what's set up;
     /// the controls are simply inert until one connects.
     fn keyer_pane(&self) -> Element<'_, Message> {
-        let palette = theme::app_theme().palette();
+        let palette = self.theme.palette();
         let connected = self.keyer_active && self.keyer_handle.is_some();
         let keying = self.keyer_snapshot.as_ref().is_some_and(|s| s.keying);
         let wpm = self.keyer_snapshot.as_ref().map(|s| s.wpm);
@@ -714,36 +713,6 @@ impl App {
 
         scrollable(column![status, send_box, buttons.wrap()].spacing(8)).into()
     }
-
-    // ---- Awards ----
-
-    /// Passive one-line awards readout. The drill-down and spot
-    /// cross-reference target live in the Logbook view's Awards pane.
-    fn awards_strip(&self) -> Element<'_, Message> {
-        let a = &self.awards;
-        let mut chips = row![
-            label(format!("{} QSOs   worked/confirmed", a.total_qsos)),
-            award_chip("DXCC".into(), &a.dxcc),
-            award_chip("WAS".into(), &a.was),
-            award_chip("WPX".into(), &a.wpx),
-            award_chip("IOTA".into(), &a.iota),
-            award_chip(format!("Marathon {}", a.marathon.year), &a.marathon.entities),
-        ]
-        .spacing(14)
-        .align_y(iced::Alignment::Center);
-        if !a.dxcc_by_band.is_empty() {
-            chips = chips.push(Space::new().width(Length::Fixed(6.0)));
-            chips = chips.push(label("DXCC by band"));
-            for (band, progress) in &a.dxcc_by_band {
-                chips = chips.push(award_chip(band.as_adif().to_string(), progress));
-            }
-        }
-        container(chips.wrap())
-            .padding([4, 8])
-            .width(Length::Fill)
-            .style(theme::strip_style)
-            .into()
-    }
 }
 
 /// `● Name  detail` — one subsystem's state in the Station pane.
@@ -758,21 +727,6 @@ fn status_line<'a>(
         text(detail).size(ROW_TEXT).style(muted),
     ]
     .spacing(6)
-    .align_y(iced::Alignment::Center)
-    .into()
-}
-
-/// `DXCC 112/87` — worked in full strength, confirmed muted.
-fn award_chip<'a>(name: String, progress: &AwardProgress) -> Element<'a, Message> {
-    row![
-        label(name),
-        text(progress.worked.to_string()).font(MONO).size(ROW_TEXT),
-        text(format!("/{}", progress.confirmed))
-            .font(MONO)
-            .size(ROW_TEXT)
-            .style(muted),
-    ]
-    .spacing(4)
     .align_y(iced::Alignment::Center)
     .into()
 }

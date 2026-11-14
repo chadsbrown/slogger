@@ -16,6 +16,7 @@ fn main() -> Result<()> {
         .title(|_state: &app::App| "slogger".to_string())
         .subscription(app::App::subscription)
         .theme(app::App::theme)
+        .scale_factor(app::App::scale_factor)
         .window(iced::window::Settings {
             size: iced::Size::new(1100.0, 800.0),
             ..Default::default()
