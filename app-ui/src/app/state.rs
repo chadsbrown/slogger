@@ -70,6 +70,9 @@ pub struct App {
     /// When set, the entry form is editing an existing QSO rather than
     /// creating a new one. Submit calls update_qso instead of create_qso.
     pub(super) editing_qso: Option<QsoId>,
+    /// Everything stored about the QSO being edited — the Logbook detail
+    /// pane shows the parts the entry form has no field for.
+    pub(super) qso_detail: Option<logbook_domain::QsoDetail>,
     /// The active colour theme, chosen in the bottom bar.
     pub(super) theme: iced::Theme,
     /// Whole-UI scale factor (the A− / A+ buttons). 1.0 is normal size.
@@ -183,6 +186,7 @@ impl App {
             importing: false,
             syncing: false,
             editing_qso: None,
+            qso_detail: None,
             theme: super::theme::app_theme(),
             font_scale: 1.0,
             modal: None,

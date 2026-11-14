@@ -4,8 +4,8 @@ use sqlx::{Row, SqlitePool};
 use uuid::Uuid;
 
 use logbook_domain::{
-    AwardQso, DedupKey, ImportedServiceState, QsoRepository, QsoSearch, QsoSummary, RepoResult,
-    RepositoryError,
+    AwardQso, DedupKey, ImportedServiceState, QsoRepository, QsoSearch, QsoServiceState,
+    QsoSummary, RepoResult, RepositoryError,
 };
 use std::collections::HashSet;
 
@@ -407,6 +407,37 @@ impl QsoRepository for SqliteQsoRepository {
         .await
         .map_err(map_err)?;
         Ok(())
+    }
+
+    async fn list_service_states(&self, qso_id: &QsoId) -> RepoResult<Vec<QsoServiceState>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT service, upload_state, confirmation_state,
+                   uploaded_at, confirmed_at, last_error
+            FROM qso_service_state
+            WHERE qso_id = ?
+            ORDER BY service
+            "#,
+        )
+        .bind(fmt_id(qso_id.as_uuid()))
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_err)?;
+
+        let mut out = Vec::with_capacity(rows.len());
+        for row in &rows {
+            let uploaded_at: Option<String> = row.try_get("uploaded_at").map_err(map_err)?;
+            let confirmed_at: Option<String> = row.try_get("confirmed_at").map_err(map_err)?;
+            out.push(QsoServiceState {
+                service: row.try_get("service").map_err(map_err)?,
+                upload_state: row.try_get("upload_state").map_err(map_err)?,
+                confirmation_state: row.try_get("confirmation_state").map_err(map_err)?,
+                uploaded_at: uploaded_at.as_deref().map(parse_dt).transpose()?,
+                confirmed_at: confirmed_at.as_deref().map(parse_dt).transpose()?,
+                last_error: row.try_get("last_error").map_err(map_err)?,
+            });
+        }
+        Ok(out)
     }
 
     async fn list_exchange_fields(
@@ -977,6 +1008,47 @@ mod tests {
         let db = Database::open_in_memory().await.unwrap();
         let repo = Arc::new(SqliteQsoRepository::new(&db));
         (LogbookService::new(repo), db)
+    }
+
+    #[tokio::test]
+    async fn qso_detail_includes_extra_fields_and_service_state() {
+        let db = Database::open_in_memory().await.unwrap();
+        let repo = Arc::new(SqliteQsoRepository::new(&db));
+        let svc = LogbookService::new(repo.clone());
+        let mut cmd = CreateQsoCommand::minimal(
+            Callsign::parse("DL1XYZ").unwrap(),
+            Utc.with_ymd_and_hms(2026, 5, 8, 18, 30, 0).unwrap(),
+        );
+        cmd.band = Some(Band::M20);
+        cmd.mode = Some(Mode::CW);
+        let id = svc.create_qso(cmd).await.unwrap();
+
+        let confirmed = Utc.with_ymd_and_hms(2026, 5, 9, 12, 0, 0).unwrap();
+        repo.mark_confirmed(&id, "lotw", confirmed, None)
+            .await
+            .unwrap();
+        repo.add_exchange_field(
+                &id,
+                &QsoExchangeField {
+                    name: "NAME".into(),
+                    raw_value: "Hans".into(),
+                    normalized_value: None,
+                    source: FieldSource::ImportedAdif,
+                },
+            )
+            .await
+            .unwrap();
+
+        let detail = svc.get_qso_detail(&id).await.unwrap().unwrap();
+        assert_eq!(detail.qso.call.as_str(), "DL1XYZ");
+        assert_eq!(detail.exchange_fields.len(), 1);
+        assert_eq!(detail.exchange_fields[0].raw_value, "Hans");
+        assert_eq!(detail.service_states.len(), 1);
+        assert_eq!(detail.service_states[0].service, "lotw");
+        assert_eq!(detail.service_states[0].confirmation_state, "confirmed");
+        assert_eq!(detail.service_states[0].confirmed_at, Some(confirmed));
+
+        assert!(svc.get_qso_detail(&QsoId::new()).await.unwrap().is_none());
     }
 
     #[tokio::test]

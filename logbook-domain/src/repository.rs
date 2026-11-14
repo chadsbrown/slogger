@@ -72,6 +72,31 @@ impl ConfirmationState {
     }
 }
 
+/// One service's upload / confirmation record for a QSO, as stored.
+/// Services with no record yet (never uploaded) are simply absent.
+#[derive(Debug, Clone, PartialEq)]
+pub struct QsoServiceState {
+    /// Service key: `lotw`, `eqsl`, `clublog`, `qrz`, `hrdlog`.
+    pub service: String,
+    /// `pending` / `uploaded` / `verified` / `failed`.
+    pub upload_state: String,
+    /// `unknown` / `pending` / `confirmed` / `mismatch`.
+    pub confirmation_state: String,
+    pub uploaded_at: Option<DateTime<Utc>>,
+    pub confirmed_at: Option<DateTime<Utc>>,
+    pub last_error: Option<String>,
+}
+
+/// Everything stored about one QSO: the record itself, the extra fields
+/// kept alongside it (contest exchanges, ADIF fields with no column of
+/// their own), and where it stands with each QSL service.
+#[derive(Debug, Clone)]
+pub struct QsoDetail {
+    pub qso: Qso,
+    pub exchange_fields: Vec<QsoExchangeField>,
+    pub service_states: Vec<QsoServiceState>,
+}
+
 #[derive(Debug, Clone)]
 pub struct PendingUpload {
     pub qso_id: QsoId,
@@ -148,6 +173,9 @@ pub trait QsoRepository: std::fmt::Debug + Send + Sync {
         &self,
         qso_id: &QsoId,
     ) -> RepoResult<Vec<QsoExchangeField>>;
+
+    /// Upload / confirmation records for one QSO, ordered by service.
+    async fn list_service_states(&self, qso_id: &QsoId) -> RepoResult<Vec<QsoServiceState>>;
 
     async fn search_qsos(&self, query: QsoSearch) -> RepoResult<Vec<QsoSummary>>;
 

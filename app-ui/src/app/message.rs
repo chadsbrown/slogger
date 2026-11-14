@@ -39,7 +39,7 @@ pub enum Message {
     SpotClicked(spot_feed::Spot),
     ToggleSpotsNeededOnly,
     QsoSelected(QsoId),
-    QsoLoadedForEdit(Result<radio_core::Qso, String>),
+    QsoLoadedForEdit(Result<logbook_domain::QsoDetail, String>),
     CancelEditPressed,
     DeletePressed,
     QsoDeleted(Result<(), String>),

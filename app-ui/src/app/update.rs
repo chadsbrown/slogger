@@ -125,9 +125,10 @@ impl App {
                     });
                 }
                 self.editing_qso = Some(id);
+                self.qso_detail = None;
                 Task::perform(
                     async move {
-                        match svc.get_qso(&id).await {
+                        match svc.get_qso_detail(&id).await {
                             Ok(Some(q)) => Ok(q),
                             Ok(None) => Err("qso not found".into()),
                             Err(e) => Err(e.to_string()),
@@ -136,7 +137,9 @@ impl App {
                     Message::QsoLoadedForEdit,
                 )
             }
-            Message::QsoLoadedForEdit(Ok(q)) => {
+            Message::QsoLoadedForEdit(Ok(detail)) => {
+                let q = detail.qso.clone();
+                self.qso_detail = Some(detail);
                 self.call_input = q.call.as_str().to_string();
                 self.band = q.band;
                 self.mode = q.mode;
@@ -836,6 +839,7 @@ impl App {
     /// then it is resynced with the rig, which may have moved meanwhile.
     fn end_edit(&mut self) -> Task<Message> {
         self.editing_qso = None;
+        self.qso_detail = None;
         match self.entry_draft.take() {
             Some(draft) => {
                 self.call_input = draft.call_input;

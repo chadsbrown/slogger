@@ -7,14 +7,18 @@
 
 use std::collections::HashSet;
 
-use iced::widget::{button, checkbox, column, pick_list, row, scrollable, text, text_input};
+use iced::widget::{
+    button, checkbox, column, pick_list, row, rule, scrollable, text, text_input,
+};
 use iced::{Element, Length};
-use logbook_domain::QsoSummary;
-use radio_core::{Band, Mode, QsoId};
+use chrono::{DateTime, Utc};
+use logbook_domain::{QsoDetail, QsoSummary};
+use radio_core::{Band, Mode, PropagationMode, QsoId, StationLocation};
 
 use crate::app::constants::{BANDS, modes};
 use crate::app::message::Message;
 use crate::app::state::App;
+use crate::app::theme;
 
 /// Tri-state filter for the `lotw_confirmed` field on `QsoSearch`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -274,17 +278,46 @@ impl App {
             .into()
     }
 
-    /// Detail pane — when a result row is selected (editing_qso is Some),
-    /// renders the same entry form widgets bound to the same state. Edits
-    /// flow through `update_qso` exactly as if the form were in
-    /// Operating.
+    /// Detail pane. The top is the entry form bound to the selected QSO
+    /// (the editable fields; saving goes through `update_qso`). Below it,
+    /// read-only, is everything else stored about the QSO.
     pub(in crate::app) fn view_logbook_detail_pane(&self) -> Element<'_, Message> {
         if self.editing_qso.is_none() {
             return text("Select a QSO from the Results pane to view detail.")
                 .size(12)
                 .into();
         }
-        self.entry_view()
+        let Some(detail) = &self.qso_detail else {
+            // Still loading; the form fills in when the record arrives.
+            return self.entry_view();
+        };
+        let mut rest = column![].spacing(12);
+        for (title, rows) in detail_sections(detail, &self.station_locations) {
+            if rows.is_empty() {
+                continue;
+            }
+            let mut section = column![theme::label(title)].spacing(2);
+            for (name, value) in rows {
+                section = section.push(
+                    row![
+                        text(name)
+                            .size(theme::ROW_TEXT)
+                            .style(theme::muted)
+                            .width(Length::Fixed(120.0)),
+                        text(value).size(theme::ROW_TEXT).font(theme::MONO),
+                    ]
+                    .spacing(8),
+                );
+            }
+            rest = rest.push(section);
+        }
+        column![
+            self.entry_view(),
+            rule::horizontal(1),
+            scrollable(rest).height(Length::Fill).width(Length::Fill),
+        ]
+        .spacing(8)
+        .into()
     }
 
     /// Tools pane — ADIF import path + Import button. Future: Export
@@ -315,5 +348,243 @@ impl App {
         ]
         .spacing(8)
         .into()
+    }
+}
+
+// ---- QSO detail ----
+
+type DetailSection = (&'static str, Vec<(String, String)>);
+
+fn timestamp(t: DateTime<Utc>) -> String {
+    t.format("%Y-%m-%d %H:%M:%S UTC").to_string()
+}
+
+/// Display name for a QSL service key as stored in the database.
+fn service_name(key: &str) -> String {
+    match key {
+        "lotw" => "LoTW".into(),
+        "eqsl" => "eQSL".into(),
+        "clublog" => "Club Log".into(),
+        "qrz" => "QRZ".into(),
+        "hrdlog" => "HRDLog".into(),
+        other => other.to_string(),
+    }
+}
+
+/// Everything stored about a QSO beyond what the entry form edits,
+/// grouped for display. Only fields that have a value are listed, so a
+/// section can come back empty (the view skips those).
+fn detail_sections(detail: &QsoDetail, locations: &[StationLocation]) -> Vec<DetailSection> {
+    /// Adds a row when the value is present.
+    fn push(rows: &mut Vec<(String, String)>, name: &str, value: Option<String>) {
+        if let Some(v) = value.filter(|v| !v.trim().is_empty()) {
+            rows.push((name.to_string(), v));
+        }
+    }
+    let q = &detail.qso;
+
+    let mut time = Vec::new();
+    push(&mut time, "Start", Some(timestamp(q.qso_begin)));
+    push(&mut time, "End", q.qso_end.map(timestamp));
+    push(&mut time, "Submode", q.submode.clone());
+
+    let mut dx = Vec::new();
+    push(
+        &mut dx,
+        "DXCC",
+        match (q.dxcc_id, q.dxcc_prefix.as_deref()) {
+            (Some(id), Some(prefix)) => Some(format!("{prefix} (#{id})")),
+            (Some(id), None) => Some(format!("#{id}")),
+            (None, Some(prefix)) => Some(prefix.to_string()),
+            (None, None) => None,
+        },
+    );
+    push(&mut dx, "Continent", q.continent.clone());
+    push(&mut dx, "CQ zone", q.cq_zone.map(|z| z.to_string()));
+    push(&mut dx, "ITU zone", q.itu_zone.map(|z| z.to_string()));
+    push(&mut dx, "Grid", q.grid.clone());
+    push(&mut dx, "State", q.state.clone());
+    push(&mut dx, "County", q.county.clone());
+    push(&mut dx, "Province", q.province.clone());
+    push(&mut dx, "IOTA", q.iota.clone());
+
+    let mut path = Vec::new();
+    push(
+        &mut path,
+        "Propagation",
+        q.propagation_mode.as_ref().map(|p| match p {
+            PropagationMode::Terrestrial => "Terrestrial".to_string(),
+            PropagationMode::Satellite => "Satellite".to_string(),
+            PropagationMode::Eme => "EME".to_string(),
+            PropagationMode::MeteorScatter => "Meteor scatter".to_string(),
+            PropagationMode::Aurora => "Aurora".to_string(),
+            PropagationMode::AircraftScatter => "Aircraft scatter".to_string(),
+            PropagationMode::Other(s) => s.clone(),
+        }),
+    );
+    push(&mut path, "Satellite", q.sat_name.clone());
+    push(&mut path, "Sat mode", q.sat_mode.clone());
+    push(&mut path, "TX power", q.tx_power_w.map(|w| format!("{w} W")));
+    push(&mut path, "RX power", q.rx_power_w.map(|w| format!("{w} W")));
+    push(&mut path, "Distance", q.distance_km.map(|d| format!("{d:.0} km")));
+    push(&mut path, "Bearing", q.bearing_deg.map(|b| format!("{b:.0}°")));
+
+    let mut station = Vec::new();
+    push(
+        &mut station,
+        "Station call",
+        q.station_callsign.as_ref().map(|c| c.as_str().to_string()),
+    );
+    push(
+        &mut station,
+        "Owner call",
+        q.owner_callsign.as_ref().map(|c| c.as_str().to_string()),
+    );
+    push(
+        &mut station,
+        "Location",
+        q.station_location_id.map(|id| {
+            locations
+                .iter()
+                .find(|l| l.id == id)
+                .map(|l| l.name.clone())
+                .unwrap_or_else(|| id.to_string())
+        }),
+    );
+    push(&mut station, "Operator", q.operator_id.map(|id| id.to_string()));
+
+    let qsl = detail
+        .service_states
+        .iter()
+        .map(|s| {
+            let mut parts = vec![match s.uploaded_at {
+                Some(at) => format!("{} {}", s.upload_state, at.format("%Y-%m-%d")),
+                None => s.upload_state.clone(),
+            }];
+            match (s.confirmation_state.as_str(), s.confirmed_at) {
+                ("unknown", _) => {}
+                (state, Some(at)) => parts.push(format!("{state} {}", at.format("%Y-%m-%d"))),
+                (state, None) => parts.push(state.to_string()),
+            }
+            if let Some(err) = s.last_error.as_deref().filter(|e| !e.is_empty()) {
+                parts.push(format!("error: {err}"));
+            }
+            (service_name(&s.service), parts.join("  ·  "))
+        })
+        .collect();
+
+    let other = detail
+        .exchange_fields
+        .iter()
+        .map(|f| {
+            let value = match f.normalized_value.as_deref() {
+                Some(n) if n != f.raw_value => format!("{}  ({n})", f.raw_value),
+                _ => f.raw_value.clone(),
+            };
+            (f.name.clone(), value)
+        })
+        .collect();
+
+    let mut record = Vec::new();
+    push(&mut record, "Created", Some(timestamp(q.created_at)));
+    push(&mut record, "Updated", Some(timestamp(q.updated_at)));
+    push(&mut record, "ID", Some(q.id.to_string()));
+
+    vec![
+        ("TIME", time),
+        ("DX STATION", dx),
+        ("PATH", path),
+        ("MY STATION", station),
+        ("QSL", qsl),
+        ("OTHER FIELDS", other),
+        ("RECORD", record),
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeZone;
+    use logbook_domain::QsoServiceState;
+    use radio_core::{Callsign, FieldSource, Qso, QsoExchangeField};
+
+    fn section<'a>(sections: &'a [DetailSection], title: &str) -> &'a [(String, String)] {
+        &sections.iter().find(|(t, _)| *t == title).unwrap().1
+    }
+
+    #[test]
+    fn detail_lists_what_is_set_and_omits_what_is_not() {
+        let begin = Utc.with_ymd_and_hms(2026, 5, 8, 18, 30, 0).unwrap();
+        let qso = Qso {
+            id: QsoId::new(),
+            call: Callsign::parse("DL1XYZ").unwrap(),
+            qso_begin: begin,
+            qso_end: None,
+            band: None,
+            freq_hz: None,
+            mode: None,
+            submode: None,
+            rst_sent: None,
+            rst_rcvd: None,
+            operator_id: None,
+            station_location_id: None,
+            station_callsign: None,
+            owner_callsign: None,
+            dxcc_id: Some(230),
+            dxcc_prefix: Some("DL".into()),
+            continent: None,
+            cq_zone: Some(14),
+            itu_zone: None,
+            grid: None,
+            state: None,
+            county: None,
+            province: None,
+            iota: None,
+            tx_power_w: None,
+            rx_power_w: None,
+            propagation_mode: None,
+            sat_name: None,
+            sat_mode: None,
+            distance_km: None,
+            bearing_deg: None,
+            created_at: begin,
+            updated_at: begin,
+        };
+        let detail = QsoDetail {
+            qso,
+            exchange_fields: vec![QsoExchangeField {
+                name: "NAME".into(),
+                raw_value: "Hans".into(),
+                normalized_value: None,
+                source: FieldSource::ImportedAdif,
+            }],
+            service_states: vec![QsoServiceState {
+                service: "lotw".into(),
+                upload_state: "verified".into(),
+                confirmation_state: "confirmed".into(),
+                uploaded_at: None,
+                confirmed_at: Some(Utc.with_ymd_and_hms(2026, 5, 9, 0, 0, 0).unwrap()),
+                last_error: None,
+            }],
+        };
+
+        let sections = detail_sections(&detail, &[]);
+        assert_eq!(
+            section(&sections, "DX STATION"),
+            [
+                ("DXCC".to_string(), "DL (#230)".to_string()),
+                ("CQ zone".to_string(), "14".to_string()),
+            ]
+        );
+        assert!(section(&sections, "PATH").is_empty());
+        assert_eq!(
+            section(&sections, "QSL"),
+            [("LoTW".to_string(), "verified  ·  confirmed 2026-05-09".to_string())]
+        );
+        assert_eq!(
+            section(&sections, "OTHER FIELDS"),
+            [("NAME".to_string(), "Hans".to_string())]
+        );
+        assert_eq!(section(&sections, "TIME")[0].1, "2026-05-08 18:30:00 UTC");
     }
 }

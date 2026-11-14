@@ -9,7 +9,7 @@ use station_resolver::{NoOpResolver, Resolver};
 use crate::commands::CreateQsoCommand;
 use crate::queries::{QsoSearch, QsoSummary};
 use crate::repository::{
-    DedupKey, ImportedServiceState, QsoRepository, RepoResult, RepositoryError,
+    DedupKey, ImportedServiceState, QsoDetail, QsoRepository, RepoResult, RepositoryError,
 };
 
 #[derive(Debug)]
@@ -199,6 +199,19 @@ impl LogbookService {
 
     pub async fn get_qso(&self, id: &QsoId) -> RepoResult<Option<Qso>> {
         self.repo.get_qso(id).await
+    }
+
+    /// The QSO plus its extra fields and per-service QSL state — what a
+    /// detail view needs. `None` if the QSO doesn't exist.
+    pub async fn get_qso_detail(&self, id: &QsoId) -> RepoResult<Option<QsoDetail>> {
+        let Some(qso) = self.repo.get_qso(id).await? else {
+            return Ok(None);
+        };
+        Ok(Some(QsoDetail {
+            qso,
+            exchange_fields: self.repo.list_exchange_fields(id).await?,
+            service_states: self.repo.list_service_states(id).await?,
+        }))
     }
 
     /// Apply edits from `command` onto an existing QSO. Re-runs resolver

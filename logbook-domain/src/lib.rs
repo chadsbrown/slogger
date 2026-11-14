@@ -15,7 +15,7 @@ pub use export::{ExportOptions, export_adif, export_adif_default};
 pub use import::{ImportError, ImportOutcome, SkippedRecord, parse_adif};
 pub use queries::{QsoSearch, QsoSummary, SortOrder};
 pub use repository::{
-    AwardQso, DedupKey, ImportedServiceState, QsoRepository, RepoResult, RepositoryError,
-    StationRepository,
+    AwardQso, DedupKey, ImportedServiceState, QsoDetail, QsoRepository, QsoServiceState,
+    RepoResult, RepositoryError, StationRepository,
 };
 pub use service::{BulkReport, ImportReport, LogbookService};
