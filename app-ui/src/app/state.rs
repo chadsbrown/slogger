@@ -22,6 +22,17 @@ use super::views::ViewKind;
 use super::views::logbook::{LogbookPaneKind, default_logbook_configuration};
 use super::views::qsl::{QslPaneKind, QslViewState, default_qsl_configuration};
 
+/// The entry form's fields, set aside while an existing QSO is edited.
+#[derive(Debug, Clone)]
+pub(super) struct EntryDraft {
+    pub(super) call_input: String,
+    pub(super) band: Option<Band>,
+    pub(super) mode: Option<Mode>,
+    pub(super) freq_input: String,
+    pub(super) rst_sent: String,
+    pub(super) rst_rcvd: String,
+}
+
 pub struct App {
     pub(super) service: Option<Arc<LogbookService>>,
     pub(super) repo: Option<Arc<dyn QsoRepository>>,
@@ -59,6 +70,10 @@ pub struct App {
     /// When set, the entry form is editing an existing QSO rather than
     /// creating a new one. Submit calls update_qso instead of create_qso.
     pub(super) editing_qso: Option<QsoId>,
+    /// What the entry form held before the current edit began. Editing a
+    /// QSO borrows the one shared form, so this is put back when the edit
+    /// ends — a logbook lookup never disturbs a QSO in progress.
+    pub(super) entry_draft: Option<EntryDraft>,
 
     pub(super) spots_active: bool,
     pub(super) spots: VecDeque<Spot>,
@@ -162,6 +177,7 @@ impl App {
             importing: false,
             syncing: false,
             editing_qso: None,
+            entry_draft: None,
             station_locations: vec![],
             active_location: None,
             new_location_name: String::new(),

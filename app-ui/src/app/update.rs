@@ -21,7 +21,7 @@ use super::message::{DupeMatch, LogbookSearchResult, Message};
 use super::panels::Panels;
 use super::services::{format_multi_summary, run_services_update};
 use super::spots::build_worked_by_band;
-use super::state::App;
+use super::state::{App, EntryDraft};
 
 impl App {
     pub fn update(&mut self, message: Message) -> Task<Message> {
@@ -93,6 +93,16 @@ impl App {
                 let Some(svc) = self.service.clone() else {
                     return Task::none();
                 };
+                if self.editing_qso.is_none() {
+                    self.entry_draft = Some(EntryDraft {
+                        call_input: self.call_input.clone(),
+                        band: self.band,
+                        mode: self.mode.clone(),
+                        freq_input: self.freq_input.clone(),
+                        rst_sent: self.rst_sent.clone(),
+                        rst_rcvd: self.rst_rcvd.clone(),
+                    });
+                }
                 self.editing_qso = Some(id);
                 Task::perform(
                     async move {
@@ -118,16 +128,10 @@ impl App {
                 Task::none()
             }
             Message::QsoLoadedForEdit(Err(e)) => {
-                self.editing_qso = None;
                 self.status = Some(format!("load qso error: {e}"));
-                Task::none()
+                self.end_edit()
             }
-            Message::CancelEditPressed => {
-                self.editing_qso = None;
-                self.call_input.clear();
-                self.dupe_match = None;
-                focus_call()
-            }
+            Message::CancelEditPressed => Task::batch([self.end_edit(), focus_call()]),
             Message::DeletePressed => {
                 let Some(svc) = self.service.clone() else {
                     return Task::none();
@@ -141,21 +145,16 @@ impl App {
                 )
             }
             Message::QsoDeleted(Ok(())) => {
-                self.editing_qso = None;
-                self.call_input.clear();
                 self.status = Some("qso deleted".into());
-                self.refresh_task()
+                Task::batch([self.end_edit(), self.refresh_task()])
             }
             Message::QsoDeleted(Err(e)) => {
                 self.status = Some(format!("delete error: {e}"));
                 Task::none()
             }
             Message::QsoUpdated(Ok(())) => {
-                self.editing_qso = None;
                 self.status = Some("qso updated".into());
-                self.call_input.clear();
-                self.dupe_match = None;
-                Task::batch([self.refresh_task(), focus_call()])
+                Task::batch([self.end_edit(), self.refresh_task(), focus_call()])
             }
             Message::QsoUpdated(Err(e)) => {
                 self.status = Some(format!("update error: {e}"));
@@ -605,6 +604,14 @@ impl App {
                 Task::none()
             }
             Message::ViewChanged(view) => {
+                // An edit belongs to the tab it started in: leaving that
+                // tab abandons it, so a QSO picked in the Logbook never
+                // shows up in the Operating entry form (or the reverse).
+                let ended = if view != self.current_view && self.editing_qso.is_some() {
+                    self.end_edit()
+                } else {
+                    Task::none()
+                };
                 self.current_view = view;
                 // Auto-refresh the QSL Pending pane on first switch
                 // into QSL so the operator sees fresh data immediately.
@@ -612,9 +619,9 @@ impl App {
                     && self.qsl_view.pending.is_empty()
                     && !self.qsl_view.loading_pending
                 {
-                    return self.run_qsl_pending_refresh();
+                    return Task::batch([ended, self.run_qsl_pending_refresh()]);
                 }
-                Task::none()
+                ended
             }
             Message::QslServiceFilterChanged(filter) => {
                 self.qsl_view.service_filter = filter;
@@ -783,6 +790,26 @@ impl App {
     }
 
     /// Queue CW on the keyer.
+    /// Finishes an edit (saved, deleted, cancelled or abandoned) and hands
+    /// the entry form back: whatever it held before the edit is restored,
+    /// then it is resynced with the rig, which may have moved meanwhile.
+    fn end_edit(&mut self) -> Task<Message> {
+        self.editing_qso = None;
+        match self.entry_draft.take() {
+            Some(draft) => {
+                self.call_input = draft.call_input;
+                self.band = draft.band;
+                self.mode = draft.mode;
+                self.freq_input = draft.freq_input;
+                self.rst_sent = draft.rst_sent;
+                self.rst_rcvd = draft.rst_rcvd;
+            }
+            None => self.call_input.clear(),
+        }
+        let follow = self.follow_rig(None);
+        Task::batch([follow, self.schedule_dupe_check()])
+    }
+
     /// The SO2R headphone mode as last reported by the switch: `"stereo"`
     /// (one radio per ear) or `"mono"` (the active radio in both ears).
     /// Reverse stereo counts as stereo; unknown counts as mono.
@@ -1405,5 +1432,56 @@ mod tests {
         report(&mut app, 7_005_000, "CW");
         assert_eq!(app.freq_input, "14.07400");
         assert_eq!(app.band, Some(Band::M20));
+    }
+
+    #[test]
+    fn ending_an_edit_restores_the_form_as_it_was() {
+        let (mut app, _) = App::init();
+        app.call_input = "K1ABC".into();
+        app.freq_input = "14.02500".into();
+        app.rst_sent = "579".into();
+        app.entry_draft = Some(EntryDraft {
+            call_input: app.call_input.clone(),
+            band: app.band,
+            mode: app.mode.clone(),
+            freq_input: app.freq_input.clone(),
+            rst_sent: app.rst_sent.clone(),
+            rst_rcvd: app.rst_rcvd.clone(),
+        });
+        app.editing_qso = Some(QsoId::new());
+        // The edit loads an old QSO over the form.
+        app.call_input = "DL1XYZ".into();
+        app.freq_input = "7.01000".into();
+        app.rst_sent = "599".into();
+
+        let _ = app.end_edit();
+
+        assert!(app.editing_qso.is_none());
+        assert!(app.entry_draft.is_none());
+        assert_eq!(app.call_input, "K1ABC");
+        assert_eq!(app.freq_input, "14.02500");
+        assert_eq!(app.rst_sent, "579");
+    }
+
+    #[test]
+    fn leaving_the_tab_abandons_an_edit() {
+        let (mut app, _) = App::init();
+        app.current_view = super::super::views::ViewKind::Logbook;
+        app.call_input = "K1ABC".into();
+        app.entry_draft = Some(EntryDraft {
+            call_input: app.call_input.clone(),
+            band: app.band,
+            mode: app.mode.clone(),
+            freq_input: app.freq_input.clone(),
+            rst_sent: app.rst_sent.clone(),
+            rst_rcvd: app.rst_rcvd.clone(),
+        });
+        app.editing_qso = Some(QsoId::new());
+        app.call_input = "DL1XYZ".into();
+
+        let _ = app.update(Message::ViewChanged(super::super::views::ViewKind::Operating));
+
+        assert!(app.editing_qso.is_none());
+        assert_eq!(app.call_input, "K1ABC");
     }
 }
