@@ -78,9 +78,9 @@ fn key_event(
         Key::Named(Named::Escape) => Some(Message::EscapePressed),
         Key::Named(Named::Tab) if modifiers.shift() => Some(Message::FocusPrevious),
         Key::Named(Named::Tab) => Some(Message::FocusNext),
-        Key::Named(Named::F1) => Some(Message::FunctionKey(1)),
-        Key::Named(Named::F2) => Some(Message::FunctionKey(2)),
-        Key::Named(Named::F3) => Some(Message::FunctionKey(3)),
+        Key::Named(named) if function_key_number(named).is_some() => {
+            function_key_number(named).map(Message::FunctionKey)
+        }
         Key::Character(c) if modifiers.control() => {
             ViewKind::ALL
                 .iter()
@@ -89,6 +89,25 @@ fn key_event(
         }
         _ => None,
     }
+}
+
+fn function_key_number(key: iced::keyboard::key::Named) -> Option<u8> {
+    use iced::keyboard::key::Named;
+    const KEYS: [Named; 12] = [
+        Named::F1,
+        Named::F2,
+        Named::F3,
+        Named::F4,
+        Named::F5,
+        Named::F6,
+        Named::F7,
+        Named::F8,
+        Named::F9,
+        Named::F10,
+        Named::F11,
+        Named::F12,
+    ];
+    KEYS.iter().position(|k| *k == key).map(|i| i as u8 + 1)
 }
 
 fn spot_events_stream() -> impl iced::futures::Stream<Item = SpotEvent> {

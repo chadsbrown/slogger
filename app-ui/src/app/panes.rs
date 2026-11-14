@@ -9,7 +9,18 @@ pub enum PaneKind {
     Spots,
     Entry,
     Station,
+    Keyer,
     Recent,
+}
+
+impl PaneKind {
+    pub(super) const ALL: &[PaneKind] = &[
+        PaneKind::Spots,
+        PaneKind::Entry,
+        PaneKind::Station,
+        PaneKind::Keyer,
+        PaneKind::Recent,
+    ];
 }
 
 impl PaneKind {
@@ -18,6 +29,7 @@ impl PaneKind {
             PaneKind::Spots => "Spots",
             PaneKind::Entry => "Entry",
             PaneKind::Station => "Station",
+            PaneKind::Keyer => "CW Keyer",
             PaneKind::Recent => "Recent",
         }
     }
@@ -28,14 +40,16 @@ impl PaneKind {
 /// ```text
 /// ┌─────────────────────────┬─────────────────┐
 /// │                         │     Entry       │
-/// │         Spots           ├─────────────────┤
+/// │                         ├─────────────────┤
+/// │         Spots           │    CW Keyer     │
+/// │                         ├─────────────────┤
 /// │                         │    Station      │
 /// ├─────────────────────────┴─────────────────┤
 /// │                Recent                     │
 /// └───────────────────────────────────────────┘
 /// ```
 /// Top row takes 70% of vertical space; Spots takes 60% of the top row's
-/// width; Entry takes 55% of the right column's height.
+/// width; the right column is split Entry 40% / CW Keyer 30% / Station 30%.
 pub(super) fn default_pane_configuration() -> Configuration<PaneKind> {
     Configuration::Split {
         axis: Axis::Horizontal,
@@ -46,9 +60,14 @@ pub(super) fn default_pane_configuration() -> Configuration<PaneKind> {
             a: Box::new(Configuration::Pane(PaneKind::Spots)),
             b: Box::new(Configuration::Split {
                 axis: Axis::Horizontal,
-                ratio: 0.55,
+                ratio: 0.40,
                 a: Box::new(Configuration::Pane(PaneKind::Entry)),
-                b: Box::new(Configuration::Pane(PaneKind::Station)),
+                b: Box::new(Configuration::Split {
+                    axis: Axis::Horizontal,
+                    ratio: 0.50,
+                    a: Box::new(Configuration::Pane(PaneKind::Keyer)),
+                    b: Box::new(Configuration::Pane(PaneKind::Station)),
+                }),
             }),
         }),
         b: Box::new(Configuration::Pane(PaneKind::Recent)),

@@ -78,6 +78,8 @@ pub struct App {
     pub(super) keyer_status: Option<String>,
     pub(super) keyer_snapshot: Option<KeyerSnapshot>,
     pub(super) keyer_handle: Option<KeyerHandle>,
+    /// Free-text CW waiting to be sent from the keyer pane's text box.
+    pub(super) keyer_text: String,
 
     pub(super) so2r_active: bool,
     pub(super) so2r_status: Option<String>,
@@ -193,6 +195,7 @@ impl App {
             keyer_status: None,
             keyer_snapshot: None,
             keyer_handle: None,
+            keyer_text: String::new(),
             so2r_active: false,
             so2r_status: None,
             so2r_snapshot: None,

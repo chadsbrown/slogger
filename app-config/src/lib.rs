@@ -54,12 +54,99 @@ pub struct KeyerConfig {
     pub serial_port: Option<String>,
     /// Initial CW speed in WPM. Default 25 if unset.
     pub initial_wpm: Option<u8>,
+    /// Message buttons for the CW keyer pane, written as `[[keyer.macro]]`
+    /// tables. Empty means "use the built-in set" — see
+    /// [`KeyerConfig::macros`].
+    #[serde(rename = "macro", skip_serializing_if = "Vec::is_empty")]
+    pub macros: Vec<KeyerMacro>,
 }
 
 impl KeyerConfig {
     pub fn is_configured(&self) -> bool {
         self.enabled && self.serial_port.is_some()
     }
+
+    /// The message buttons to show: the operator's `[[keyer.macro]]`
+    /// entries, or the built-in defaults when none are configured. The
+    /// first twelve are bound to F1..F12 in order.
+    pub fn macros(&self) -> Vec<KeyerMacro> {
+        if self.macros.is_empty() {
+            KeyerMacro::defaults()
+        } else {
+            self.macros.clone()
+        }
+    }
+}
+
+/// One pre-populated CW message: a button label and the text it sends.
+///
+/// `text` may contain placeholders, filled in when the button is pressed:
+///
+/// - `{MYCALL}` — the operator's callsign (active station location, else
+///   `[station].default_callsign`)
+/// - `{CALL}` — the callsign currently in the entry form
+/// - `{RST}` — the sent report from the entry form, with 9 keyed as N
+///   (`599` → `5NN`)
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KeyerMacro {
+    pub label: String,
+    pub text: String,
+}
+
+/// Values substituted into a [`KeyerMacro`]'s placeholders.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct MacroContext<'a> {
+    pub my_call: Option<&'a str>,
+    pub call: Option<&'a str>,
+    pub rst_sent: Option<&'a str>,
+}
+
+impl KeyerMacro {
+    pub fn new(label: &str, text: &str) -> Self {
+        Self {
+            label: label.into(),
+            text: text.into(),
+        }
+    }
+
+    /// The built-in message set used when no `[[keyer.macro]]` is configured.
+    pub fn defaults() -> Vec<Self> {
+        vec![
+            Self::new("CQ", "CQ CQ DE {MYCALL} {MYCALL} K"),
+            Self::new("His call", "{CALL}"),
+            Self::new("Report", "{CALL} UR {RST} {RST}"),
+            Self::new("TU", "TU 73"),
+            Self::new("My call", "{MYCALL}"),
+            Self::new("AGN", "AGN?"),
+        ]
+    }
+
+    /// Fills in the placeholders. Returns `Err` naming the first
+    /// placeholder whose value is missing, so the UI can explain why a
+    /// message can't be sent yet rather than keying a literal `{CALL}`.
+    pub fn expand(&self, ctx: MacroContext<'_>) -> Result<String, &'static str> {
+        let rst = ctx
+            .rst_sent
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(|s| s.replace('9', "N"));
+        let values: [(&'static str, Option<String>); 3] = [
+            ("{MYCALL}", non_empty(ctx.my_call)),
+            ("{CALL}", non_empty(ctx.call)),
+            ("{RST}", rst),
+        ];
+        let mut out = self.text.clone();
+        for (placeholder, value) in values {
+            if out.contains(placeholder) {
+                out = out.replace(placeholder, &value.ok_or(placeholder)?);
+            }
+        }
+        Ok(out.to_ascii_uppercase())
+    }
+}
+
+fn non_empty(s: Option<&str>) -> Option<String> {
+    s.map(str::trim).filter(|s| !s.is_empty()).map(str::to_string)
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -512,5 +599,51 @@ mod tests {
         assert!(text.contains("[lotw]"));
         let cfg = Config::load_from(&path).unwrap();
         assert!(!cfg.lotw.is_configured_for_upload());
+    }
+
+    #[test]
+    fn keyer_macros_default_when_none_configured() {
+        let cfg = Config::default();
+        assert_eq!(cfg.keyer.macros(), KeyerMacro::defaults());
+    }
+
+    #[test]
+    fn parses_keyer_macro_tables() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            "[keyer]\nenabled = true\n\n[[keyer.macro]]\nlabel = \"CQ\"\ntext = \"CQ TEST {MYCALL}\"\n\n\
+             [[keyer.macro]]\nlabel = \"TU\"\ntext = \"TU\"\n",
+        )
+        .unwrap();
+        let cfg = Config::load_from(&path).unwrap();
+        assert_eq!(
+            cfg.keyer.macros(),
+            vec![KeyerMacro::new("CQ", "CQ TEST {MYCALL}"), KeyerMacro::new("TU", "TU")]
+        );
+    }
+
+    #[test]
+    fn keyer_macro_expands_placeholders() {
+        let ctx = MacroContext {
+            my_call: Some("w1abc"),
+            call: Some(" JA1NUT "),
+            rst_sent: Some("599"),
+        };
+        let m = KeyerMacro::new("Report", "{CALL} de {MYCALL} ur {RST} {RST}");
+        assert_eq!(m.expand(ctx).unwrap(), "JA1NUT DE W1ABC UR 5NN 5NN");
+    }
+
+    #[test]
+    fn keyer_macro_reports_missing_placeholder_value() {
+        let ctx = MacroContext {
+            my_call: Some("W1ABC"),
+            call: Some(""),
+            rst_sent: None,
+        };
+        assert_eq!(KeyerMacro::new("His", "{CALL}").expand(ctx), Err("{CALL}"));
+        // A message that doesn't use the missing value still expands.
+        assert_eq!(KeyerMacro::new("TU", "tu 73").expand(ctx).unwrap(), "TU 73");
     }
 }

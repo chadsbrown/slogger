@@ -161,6 +161,14 @@ echo to the UI yet.
 
 **Auto-reconnect**: same backoff pattern as rig.
 
+**Keyer pane and message buttons**: the Operating view's CW Keyer pane has
+a free-text box (Enter sends), speed and abort controls, and a row of
+message buttons. Buttons come from `[[keyer.macro]]` tables, each with a
+`label` and `text`; the first twelve are bound to F1..F12. With none
+configured a built-in set is used (CQ, His call, Report, TU, My call,
+AGN). `text` may use `{MYCALL}`, `{CALL}` (entry-form callsign) and
+`{RST}` (entry-form sent report, 9 keyed as N). See `example-config.toml`.
+
 ### `[so2r]` — OTRSP SO2R switch
 
 ```toml

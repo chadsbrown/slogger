@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use app_config::{KeyerMacro, MacroContext};
 use chrono::Utc;
 use iced::Task;
 use iced::widget::pane_grid;
@@ -503,18 +504,7 @@ impl App {
                 self.awards_drawer.target_unit = None;
                 Task::none()
             }
-            Message::KeyerSendMacro(text) => {
-                let Some(handle) = self.keyer_handle.clone() else {
-                    self.status = Some("keyer not connected".into());
-                    return Task::none();
-                };
-                Task::perform(
-                    async move {
-                        handle.send_message(&text).await.map_err(|e| e.to_string())
-                    },
-                    Message::KeyerSendFinished,
-                )
-            }
+            Message::KeyerSendMacro(text) => self.send_cw(text),
             Message::KeyerSendFinished(result) => {
                 if let Err(e) = result {
                     self.status = Some(format!("keyer error: {e}"));
@@ -525,16 +515,59 @@ impl App {
             Message::FocusNext => iced::widget::operation::focus_next(),
             Message::FocusPrevious => iced::widget::operation::focus_previous(),
             Message::EscapePressed => self.escape(),
-            Message::FunctionKey(n) => match self.keyer_macro(n) {
-                Some((_, text)) if self.keyer_handle.is_some() => {
-                    self.update(Message::KeyerSendMacro(text))
+            Message::FunctionKey(n) => {
+                let Some(m) = self.keyer_macros().into_iter().nth(n as usize - 1) else {
+                    return Task::none();
+                };
+                match self.expand_macro(&m) {
+                    Ok(text) => self.send_cw(text),
+                    Err(missing) => {
+                        self.status = Some(format!(
+                            "F{n} {}: nothing to send for {missing} yet",
+                            m.label
+                        ));
+                        Task::none()
+                    }
                 }
-                Some(_) => {
-                    self.status = Some(format!("F{n}: keyer not connected"));
-                    Task::none()
+            }
+            Message::KeyerTextChanged(s) => {
+                self.keyer_text = s.to_ascii_uppercase();
+                Task::none()
+            }
+            Message::KeyerTextSubmitted => {
+                let text = self.keyer_text.trim().to_string();
+                if text.is_empty() || self.keyer_handle.is_none() {
+                    // Keep the text if there's no keyer to send it to.
+                    return self.send_cw(text);
                 }
-                None => Task::none(),
-            },
+                self.keyer_text.clear();
+                self.send_cw(text)
+            }
+            Message::KeyerAbortPressed => self.abort_cw(),
+            Message::KeyerSetWpm(wpm) => {
+                let Some(handle) = self.keyer_handle.clone() else {
+                    return Task::none();
+                };
+                let wpm = wpm.clamp(5, 50);
+                Task::perform(
+                    async move {
+                        handle.set_wpm(wpm).await.map(|()| wpm).map_err(|e| e.to_string())
+                    },
+                    Message::KeyerSetWpmFinished,
+                )
+            }
+            Message::KeyerSetWpmFinished(Ok(wpm)) => {
+                // Reflect the new speed immediately; the keyer only reports
+                // speed changes made on its own pot.
+                if let Some(snap) = self.keyer_snapshot.as_mut() {
+                    snap.wpm = wpm;
+                }
+                Task::none()
+            }
+            Message::KeyerSetWpmFinished(Err(e)) => {
+                self.status = Some(format!("keyer speed error: {e}"));
+                Task::none()
+            }
             Message::KeyerAbortFinished(result) => {
                 self.status = Some(match result {
                     Ok(()) => "CW aborted".into(),
@@ -672,11 +705,8 @@ impl App {
     /// Operating view, cancels an edit or wipes the call and refocuses it.
     fn escape(&mut self) -> Task<Message> {
         let keying = self.keyer_snapshot.as_ref().is_some_and(|s| s.keying);
-        if keying && let Some(handle) = self.keyer_handle.clone() {
-            return Task::perform(
-                async move { handle.abort().await.map_err(|e| e.to_string()) },
-                Message::KeyerAbortFinished,
-            );
+        if keying && self.keyer_handle.is_some() {
+            return self.abort_cw();
         }
         if self.current_view != super::views::ViewKind::Operating {
             return Task::none();
@@ -703,20 +733,50 @@ impl App {
             })
     }
 
-    /// Keyer macro `n` (bound to F`n`) as `(button label, CW text)`.
-    /// Returns None for an unassigned number, or when the macro needs the
-    /// other station's call and none has been typed yet.
-    pub(super) fn keyer_macro(&self, n: u8) -> Option<(String, String)> {
-        let my_call = self.my_call().unwrap_or_else(|| "<CALL>".into());
-        let his_call = self.call_input.trim();
-        match n {
-            1 => Some(("CQ".into(), format!("CQ CQ DE {my_call} {my_call} K"))),
-            2 if !his_call.is_empty() => {
-                Some((his_call.to_string(), format!("{his_call} DE {my_call}")))
-            }
-            3 => Some(("TU 73".into(), "TU 73".into())),
-            _ => None,
+    /// The CW message buttons: `[[keyer.macro]]` from config, or the
+    /// built-in set. Position in this list is the F-key number minus one.
+    pub(super) fn keyer_macros(&self) -> Vec<KeyerMacro> {
+        match &self.config {
+            Some(cfg) => cfg.keyer.macros(),
+            None => KeyerMacro::defaults(),
         }
+    }
+
+    /// Fills a message's placeholders from the live operating context.
+    /// `Err` names the placeholder that has no value yet.
+    pub(super) fn expand_macro(&self, m: &KeyerMacro) -> Result<String, &'static str> {
+        let my_call = self.my_call();
+        m.expand(MacroContext {
+            my_call: my_call.as_deref(),
+            call: Some(self.call_input.as_str()),
+            rst_sent: Some(self.rst_sent.as_str()),
+        })
+    }
+
+    /// Queue CW on the keyer.
+    fn send_cw(&mut self, text: String) -> Task<Message> {
+        if text.is_empty() {
+            return Task::none();
+        }
+        let Some(handle) = self.keyer_handle.clone() else {
+            self.status = Some("keyer not connected".into());
+            return Task::none();
+        };
+        Task::perform(
+            async move { handle.send_message(&text).await.map_err(|e| e.to_string()) },
+            Message::KeyerSendFinished,
+        )
+    }
+
+    /// Stop sending immediately and flush the keyer's buffer.
+    fn abort_cw(&mut self) -> Task<Message> {
+        let Some(handle) = self.keyer_handle.clone() else {
+            return Task::none();
+        };
+        Task::perform(
+            async move { handle.abort().await.map_err(|e| e.to_string()) },
+            Message::KeyerAbortFinished,
+        )
     }
 
     /// Builds a `QsoSearch` from the logbook drawer filter form and runs
@@ -1267,6 +1327,25 @@ mod tests {
             rig_index: 0,
             snapshot: snapshot(freq_hz, mode),
         }));
+    }
+
+    #[test]
+    fn keyer_messages_fill_in_from_the_entry_form() {
+        let (mut app, _) = App::init();
+        let report = KeyerMacro::new("Report", "{CALL} UR {RST}");
+        assert_eq!(app.expand_macro(&report), Err("{CALL}"));
+        let _ = app.update(Message::CallChanged("ja1nut".into()));
+        app.rst_sent = "599".into();
+        assert_eq!(app.expand_macro(&report).unwrap(), "JA1NUT UR 5NN");
+    }
+
+    #[test]
+    fn unsent_keyer_text_is_kept_when_no_keyer_is_connected() {
+        let (mut app, _) = App::init();
+        let _ = app.update(Message::KeyerTextChanged("qrl?".into()));
+        let _ = app.update(Message::KeyerTextSubmitted);
+        assert_eq!(app.keyer_text, "QRL?");
+        assert_eq!(app.status.as_deref(), Some("keyer not connected"));
     }
 
     #[test]

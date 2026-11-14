@@ -12,6 +12,7 @@ pub(super) const ENTRY_CALL_ID: &str = "entry-call";
 pub(super) const ENTRY_FREQ_ID: &str = "entry-freq";
 pub(super) const ENTRY_RST_SENT_ID: &str = "entry-rst-sent";
 pub(super) const ENTRY_RST_RCVD_ID: &str = "entry-rst-rcvd";
+pub(super) const KEYER_TEXT_ID: &str = "keyer-text";
 
 /// Returns a Task that focuses the Call input. Useful after logging a QSO
 /// (the operator is ready for the next callsign) or after a successful

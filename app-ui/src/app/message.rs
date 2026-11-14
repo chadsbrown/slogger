@@ -102,10 +102,19 @@ pub enum Message {
     AwardsSetTarget(TargetUnit),
     AwardsClearTarget,
 
-    // ---- Keyer macros (Station pane) ----
-    /// Send arbitrary CW text via the keyer.
+    // ---- CW keyer pane ----
+    /// Send this exact CW text via the keyer.
     KeyerSendMacro(String),
     KeyerSendFinished(Result<(), String>),
+    /// Free-text box edited.
+    KeyerTextChanged(String),
+    /// Enter in the free-text box: send its contents and clear it.
+    KeyerTextSubmitted,
+    /// Stop sending and flush the keyer buffer.
+    KeyerAbortPressed,
+    /// Change CW speed to this many WPM.
+    KeyerSetWpm(u8),
+    KeyerSetWpmFinished(Result<u8, String>),
 
     // ---- Keyboard ----
     /// Esc: abort CW if the keyer is sending, otherwise cancel the edit /
@@ -114,7 +123,7 @@ pub enum Message {
     /// Tab / Shift+Tab: move focus between text fields.
     FocusNext,
     FocusPrevious,
-    /// F1..F3: fire the numbered keyer macro.
+    /// F1..F12: fire the numbered keyer message.
     FunctionKey(u8),
     KeyerAbortFinished(Result<(), String>),
     /// One-second heartbeat. Carries no state; it exists so the UTC clock,

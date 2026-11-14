@@ -4,7 +4,7 @@
 //! most time in.
 //!
 //! Keyboard: Enter logs, Esc wipes (or aborts CW), Tab moves between
-//! fields, F1–F3 fire keyer macros. See `subscriptions::key_event`.
+//! fields, F1–F12 send the keyer pane's messages. See `subscriptions::key_event`.
 
 use chrono::{DateTime, Utc};
 use iced::widget::pane_grid::{Content, PaneGrid, TitleBar};
@@ -15,7 +15,9 @@ use radio_core::Callsign;
 
 use crate::app::constants::{BANDS, SPOT_MAX_AGE_SECS, modes};
 use crate::app::drawers::awards::AwardKind;
-use crate::app::focus::{ENTRY_CALL_ID, ENTRY_FREQ_ID, ENTRY_RST_RCVD_ID, ENTRY_RST_SENT_ID};
+use crate::app::focus::{
+    ENTRY_CALL_ID, ENTRY_FREQ_ID, ENTRY_RST_RCVD_ID, ENTRY_RST_SENT_ID, KEYER_TEXT_ID,
+};
 use crate::app::message::Message;
 use crate::app::panes::PaneKind;
 use crate::app::spots::{SpotStatus, describe_spot, status_label};
@@ -34,6 +36,7 @@ pub(in crate::app) fn view(app: &App) -> Element<'_, Message> {
             PaneKind::Spots => app.spots_pane(),
             PaneKind::Entry => app.entry_view(),
             PaneKind::Station => app.station_pane(),
+            PaneKind::Keyer => app.keyer_pane(),
             PaneKind::Recent => app.recent_pane(),
         };
         Content::new(container(body).padding(8))
@@ -459,35 +462,6 @@ impl App {
             });
         }
 
-        // Keyer. The dot goes green while CW is going out — the most
-        // reliable TX signal slogger has today (rig PTT isn't surfaced).
-        let keying = self.keyer_snapshot.as_ref().is_some_and(|s| s.keying);
-        let (keyer_color, keyer_text) = if self.keyer_active {
-            let wpm = self.keyer_snapshot.as_ref().map(|s| s.wpm).unwrap_or(0);
-            (
-                if keying { palette.success } else { palette.primary },
-                format!("{wpm} WPM{}", if keying { "  ·  sending" } else { "" }),
-            )
-        } else {
-            (off, self.keyer_status.clone().unwrap_or_else(|| "off".into()))
-        };
-        col = col.push(status_line(keyer_color, "Keyer", keyer_text));
-
-        if self.keyer_active {
-            let mut macros = row![].spacing(4);
-            for n in 1..=3u8 {
-                if let Some((name, cw)) = self.keyer_macro(n) {
-                    macros = macros.push(
-                        button(text(format!("F{n} {name}")).size(12))
-                            .padding([2, 8])
-                            .on_press(Message::KeyerSendMacro(cw))
-                            .style(button::secondary),
-                    );
-                }
-            }
-            col = col.push(macros);
-        }
-
         let (so2r_color, so2r_text) = if self.so2r_active {
             let s = self.so2r_snapshot.as_ref();
             (
@@ -513,6 +487,93 @@ impl App {
         col = col.push(status_line(wsjtx_color, "WSJT-X", wsjtx_text));
 
         scrollable(col).into()
+    }
+
+    // ---- CW keyer ----
+
+    /// Free-text CW box, speed / abort controls, and the configurable
+    /// message buttons (`[[keyer.macro]]`, bound to F1..F12 in order).
+    /// Shown even without a keyer so the operator can see what's set up;
+    /// the controls are simply inert until one connects.
+    fn keyer_pane(&self) -> Element<'_, Message> {
+        let palette = theme::app_theme().palette();
+        let connected = self.keyer_active && self.keyer_handle.is_some();
+        let keying = self.keyer_snapshot.as_ref().is_some_and(|s| s.keying);
+        let wpm = self.keyer_snapshot.as_ref().map(|s| s.wpm);
+
+        // Status + speed + abort. The dot goes green while CW is going
+        // out — the most reliable TX signal slogger has today.
+        let small = |caption: &'static str, msg: Option<Message>| {
+            button(text(caption).size(12))
+                .padding([2, 8])
+                .on_press_maybe(msg)
+                .style(button::secondary)
+        };
+        let status: Element<'_, Message> = if connected {
+            let dot = if keying { palette.success } else { palette.primary };
+            row![
+                text("●").size(11).color(dot),
+                text(if keying { "Sending" } else { "Ready" }).size(ROW_TEXT),
+                Space::new().width(Length::Fill),
+                small("−", wpm.map(|w| Message::KeyerSetWpm(w.saturating_sub(1)))),
+                text(wpm.map(|w| format!("{w} WPM")).unwrap_or_else(|| "-- WPM".into()))
+                    .font(MONO)
+                    .size(ROW_TEXT),
+                small("+", wpm.map(|w| Message::KeyerSetWpm(w.saturating_add(1)))),
+                button(text("Abort").size(12))
+                    .padding([2, 8])
+                    .on_press_maybe(keying.then_some(Message::KeyerAbortPressed))
+                    .style(button::danger),
+            ]
+            .spacing(6)
+            .align_y(iced::Alignment::Center)
+            .into()
+        } else {
+            row![
+                text("●").size(11).color(Color { a: 0.3, ..palette.text }),
+                text(
+                    self.keyer_status
+                        .clone()
+                        .unwrap_or_else(|| "Keyer not configured — see [keyer] in config.toml".into())
+                )
+                .size(ROW_TEXT)
+                .style(muted),
+            ]
+            .spacing(6)
+            .align_y(iced::Alignment::Center)
+            .into()
+        };
+
+        let send_box = text_input("Type CW and press Enter", &self.keyer_text)
+            .id(Id::new(KEYER_TEXT_ID))
+            .on_input(Message::KeyerTextChanged)
+            .on_submit(Message::KeyerTextSubmitted)
+            .font(MONO)
+            .padding([5, 8]);
+
+        // One button per message. A message whose placeholders can't be
+        // filled yet (e.g. {CALL} with an empty entry form) is disabled.
+        let mut buttons = row![].spacing(4);
+        for (i, m) in self.keyer_macros().into_iter().enumerate() {
+            let caption = if i < 12 {
+                format!("F{} {}", i + 1, m.label)
+            } else {
+                m.label.clone()
+            };
+            let on_press = self
+                .expand_macro(&m)
+                .ok()
+                .filter(|_| connected)
+                .map(Message::KeyerSendMacro);
+            buttons = buttons.push(
+                button(text(caption).size(12))
+                    .padding([3, 8])
+                    .on_press_maybe(on_press)
+                    .style(button::secondary),
+            );
+        }
+
+        scrollable(column![status, send_box, buttons.wrap()].spacing(8)).into()
     }
 
     // ---- Awards ----

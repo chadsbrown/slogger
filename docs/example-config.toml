@@ -65,6 +65,28 @@
 # serial_port = "/dev/ttyUSB1"
 # initial_wpm = 25                 # 5..50; defaults to 25
 
+# Message buttons for the CW keyer pane. The first twelve are bound to
+# F1..F12 in the order written. Leave these out to get the built-in set
+# (CQ, His call, Report, TU, My call, AGN); writing any [[keyer.macro]]
+# replaces that set entirely.
+#
+# Placeholders, filled in when the message is sent:
+#   {MYCALL}  your callsign (active station, else [station].default_callsign)
+#   {CALL}    the callsign in the entry form
+#   {RST}     the sent report from the entry form, 9 keyed as N (599 -> 5NN)
+#
+# [[keyer.macro]]
+# label = "CQ"
+# text = "CQ CQ DE {MYCALL} {MYCALL} K"
+#
+# [[keyer.macro]]
+# label = "Report"
+# text = "{CALL} UR {RST} {RST}"
+#
+# [[keyer.macro]]
+# label = "TU"
+# text = "TU 73"
+
 
 # ============================================================
 # [so2r] — OTRSP SO2R switch

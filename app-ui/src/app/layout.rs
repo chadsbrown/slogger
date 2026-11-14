@@ -29,6 +29,20 @@ pub enum LayoutTree {
     Pane(PaneKind),
 }
 
+impl LayoutTree {
+    fn contains(&self, kind: PaneKind) -> bool {
+        match self {
+            LayoutTree::Split { a, b, .. } => a.contains(kind) || b.contains(kind),
+            LayoutTree::Pane(k) => *k == kind,
+        }
+    }
+
+    /// True when every pane the current build knows about appears in the tree.
+    fn has_every_pane(&self) -> bool {
+        PaneKind::ALL.iter().all(|k| self.contains(*k))
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub enum AxisRepr {
     Horizontal,
@@ -110,7 +124,13 @@ pub(super) fn layout_path() -> Option<PathBuf> {
 pub(super) fn load_layout() -> Option<LayoutTree> {
     let path = layout_path()?;
     let contents = std::fs::read_to_string(&path).ok()?;
-    match serde_json::from_str(&contents) {
+    match serde_json::from_str::<LayoutTree>(&contents) {
+        // A layout saved by an older build won't mention panes added
+        // since; restoring it would leave those panes unreachable.
+        Ok(t) if !t.has_every_pane() => {
+            tracing::info!(path = %path.display(), "saved ui layout predates a new pane; using default layout");
+            None
+        }
         Ok(t) => Some(t),
         Err(e) => {
             tracing::warn!(path = %path.display(), error = %e, "ui-layout.json unparseable; using default layout");
@@ -141,5 +161,39 @@ pub(super) async fn save_layout(tree: LayoutTree) {
     }
     if let Err(e) = tokio::fs::write(&path, json).await {
         tracing::warn!(path = %path.display(), error = %e, "failed to write ui layout");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::panes::default_pane_configuration;
+
+    fn tree_from_configuration(c: &Configuration<PaneKind>) -> LayoutTree {
+        match c {
+            Configuration::Split { axis, ratio, a, b } => LayoutTree::Split {
+                axis: (*axis).into(),
+                ratio: *ratio,
+                a: Box::new(tree_from_configuration(a)),
+                b: Box::new(tree_from_configuration(b)),
+            },
+            Configuration::Pane(kind) => LayoutTree::Pane(*kind),
+        }
+    }
+
+    #[test]
+    fn default_layout_has_every_pane() {
+        assert!(tree_from_configuration(&default_pane_configuration()).has_every_pane());
+    }
+
+    #[test]
+    fn layout_missing_a_pane_is_detected() {
+        let old = LayoutTree::Split {
+            axis: AxisRepr::Horizontal,
+            ratio: 0.5,
+            a: Box::new(LayoutTree::Pane(PaneKind::Spots)),
+            b: Box::new(LayoutTree::Pane(PaneKind::Entry)),
+        };
+        assert!(!old.has_every_pane());
     }
 }
