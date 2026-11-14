@@ -1,113 +1,25 @@
-//! Pane layout persistence.
+//! Operating-panel layout persistence.
 //!
-//! iced's `pane_grid::Node` is the internal layout tree (binary splits
-//! plus opaque `Pane` IDs). It isn't directly serializable, and its leaf
-//! `Pane` IDs are runtime-only, so we mirror the structure into a
-//! serializable `LayoutTree` keyed on our own `PaneKind`. On boot the
-//! tree (if present at `~/.local/share/slogger/ui-layout.json`) is
-//! converted back into `pane_grid::Configuration<PaneKind>`. On every
-//! `PaneResized` / `PaneDragged` event the new layout is written
-//! asynchronously; a generation counter drops in-flight writes that
-//! have been superseded by a newer resize.
+//! The position, size, open/closed state and stacking order of every
+//! Operating panel is written to `~/.local/share/slogger/ui-layout.json`
+//! whenever the operator finishes moving, resizing, opening or closing a
+//! panel, and read back at boot.
 
 use std::path::PathBuf;
 
-use iced::widget::pane_grid::{self, Axis, Configuration, Node};
 use serde::{Deserialize, Serialize};
 
-use super::panes::PaneKind;
+use super::panels::Panel;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "kind")]
-pub enum LayoutTree {
-    Split {
-        axis: AxisRepr,
-        ratio: f32,
-        a: Box<LayoutTree>,
-        b: Box<LayoutTree>,
-    },
-    Pane(PaneKind),
-}
+/// Bumped when the file format changes incompatibly. Version 1 was the
+/// tiled split tree used before panels became free-floating.
+const VERSION: u32 = 2;
 
-impl LayoutTree {
-    fn contains(&self, kind: PaneKind) -> bool {
-        match self {
-            LayoutTree::Split { a, b, .. } => a.contains(kind) || b.contains(kind),
-            LayoutTree::Pane(k) => *k == kind,
-        }
-    }
-
-    /// True when every pane the current build knows about appears in the tree.
-    fn has_every_pane(&self) -> bool {
-        PaneKind::ALL.iter().all(|k| self.contains(*k))
-    }
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub enum AxisRepr {
-    Horizontal,
-    Vertical,
-}
-
-impl From<Axis> for AxisRepr {
-    fn from(a: Axis) -> Self {
-        match a {
-            Axis::Horizontal => AxisRepr::Horizontal,
-            Axis::Vertical => AxisRepr::Vertical,
-        }
-    }
-}
-
-impl From<AxisRepr> for Axis {
-    fn from(a: AxisRepr) -> Self {
-        match a {
-            AxisRepr::Horizontal => Axis::Horizontal,
-            AxisRepr::Vertical => Axis::Vertical,
-        }
-    }
-}
-
-/// Walks the iced internal layout tree and translates each opaque
-/// `pane_grid::Pane` to its corresponding `PaneKind` via the state's
-/// `get()` lookup. The tree shape is preserved verbatim — splits stay
-/// splits with the same axis and ratio.
-pub(super) fn tree_from_state(state: &pane_grid::State<PaneKind>) -> LayoutTree {
-    walk(state.layout(), state)
-}
-
-fn walk(node: &Node, state: &pane_grid::State<PaneKind>) -> LayoutTree {
-    match node {
-        Node::Split {
-            axis, ratio, a, b, ..
-        } => LayoutTree::Split {
-            axis: (*axis).into(),
-            ratio: *ratio,
-            a: Box::new(walk(a, state)),
-            b: Box::new(walk(b, state)),
-        },
-        Node::Pane(pane) => {
-            // A pane present in the layout tree but missing from the state
-            // map shouldn't happen, but if it ever does we fall back to
-            // Spots — better to have a usable layout than a panic.
-            let kind = state.get(*pane).copied().unwrap_or(PaneKind::Spots);
-            LayoutTree::Pane(kind)
-        }
-    }
-}
-
-/// Builds an iced `Configuration` from a saved tree. Used at boot when
-/// `ui-layout.json` is present; otherwise the caller falls back to
-/// `default_pane_configuration()`.
-pub(super) fn configuration_from_tree(tree: &LayoutTree) -> Configuration<PaneKind> {
-    match tree {
-        LayoutTree::Split { axis, ratio, a, b } => Configuration::Split {
-            axis: (*axis).into(),
-            ratio: *ratio,
-            a: Box::new(configuration_from_tree(a)),
-            b: Box::new(configuration_from_tree(b)),
-        },
-        LayoutTree::Pane(kind) => Configuration::Pane(*kind),
-    }
+#[derive(Debug, Serialize, Deserialize)]
+struct LayoutFile {
+    version: u32,
+    /// Back-to-front stacking order.
+    panels: Vec<Panel>,
 }
 
 /// Resolves the on-disk path for the saved layout. Returns None if the
@@ -117,36 +29,36 @@ pub(super) fn layout_path() -> Option<PathBuf> {
     Some(dirs::data_local_dir()?.join("slogger").join("ui-layout.json"))
 }
 
-/// Best-effort load. Returns None on any error (file missing, parse
-/// failure, etc.) so the caller falls back to the default layout. The
-/// file lives in a directory the operator could hand-edit; we don't
-/// crash if they corrupt it.
-pub(super) fn load_layout() -> Option<LayoutTree> {
+/// Best-effort load. Returns None on any problem (file missing, written
+/// by an older build, hand-edited into nonsense) so the caller falls back
+/// to the default arrangement — a bad layout file must never stop the
+/// app from starting.
+pub(super) fn load_layout() -> Option<Vec<Panel>> {
     let path = layout_path()?;
     let contents = std::fs::read_to_string(&path).ok()?;
-    match serde_json::from_str::<LayoutTree>(&contents) {
-        // A layout saved by an older build won't mention panes added
-        // since; restoring it would leave those panes unreachable.
-        Ok(t) if !t.has_every_pane() => {
-            tracing::info!(path = %path.display(), "saved ui layout predates a new pane; using default layout");
-            None
-        }
-        Ok(t) => Some(t),
-        Err(e) => {
-            tracing::warn!(path = %path.display(), error = %e, "ui-layout.json unparseable; using default layout");
-            None
-        }
-    }
+    parse_layout(&contents).or_else(|| {
+        tracing::info!(path = %path.display(), "saved ui layout is unreadable or from an older version; using default layout");
+        None
+    })
+}
+
+fn parse_layout(contents: &str) -> Option<Vec<Panel>> {
+    let file: LayoutFile = serde_json::from_str(contents).ok()?;
+    (file.version == VERSION).then_some(file.panels)
 }
 
 /// Best-effort save. Writes pretty JSON for hand-editability. Errors are
 /// logged but not surfaced to the operator — layout persistence is a
 /// nice-to-have, not a correctness requirement.
-pub(super) async fn save_layout(tree: LayoutTree) {
+pub(super) async fn save_layout(panels: Vec<Panel>) {
     let Some(path) = layout_path() else {
         return;
     };
-    let json = match serde_json::to_string_pretty(&tree) {
+    let file = LayoutFile {
+        version: VERSION,
+        panels,
+    };
+    let json = match serde_json::to_string_pretty(&file) {
         Ok(s) => s,
         Err(e) => {
             tracing::warn!(error = %e, "failed to serialize ui layout");
@@ -167,33 +79,24 @@ pub(super) async fn save_layout(tree: LayoutTree) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::panes::default_pane_configuration;
-
-    fn tree_from_configuration(c: &Configuration<PaneKind>) -> LayoutTree {
-        match c {
-            Configuration::Split { axis, ratio, a, b } => LayoutTree::Split {
-                axis: (*axis).into(),
-                ratio: *ratio,
-                a: Box::new(tree_from_configuration(a)),
-                b: Box::new(tree_from_configuration(b)),
-            },
-            Configuration::Pane(kind) => LayoutTree::Pane(*kind),
-        }
-    }
+    use crate::app::panels::Panels;
 
     #[test]
-    fn default_layout_has_every_pane() {
-        assert!(tree_from_configuration(&default_pane_configuration()).has_every_pane());
-    }
-
-    #[test]
-    fn layout_missing_a_pane_is_detected() {
-        let old = LayoutTree::Split {
-            axis: AxisRepr::Horizontal,
-            ratio: 0.5,
-            a: Box::new(LayoutTree::Pane(PaneKind::Spots)),
-            b: Box::new(LayoutTree::Pane(PaneKind::Entry)),
+    fn current_format_parses() {
+        let file = LayoutFile {
+            version: VERSION,
+            panels: Panels::default().to_saved(),
         };
-        assert!(!old.has_every_pane());
+        let json = serde_json::to_string_pretty(&file).unwrap();
+        assert_eq!(parse_layout(&json), Some(Panels::default().to_saved()));
+    }
+
+    #[test]
+    fn old_tiled_layout_is_rejected_rather_than_crashing() {
+        let v1 = r#"{"kind":"Split","axis":"Horizontal","ratio":0.7,
+                    "a":{"kind":"Pane","0":"Spots"},"b":{"kind":"Pane","0":"Recent"}}"#;
+        assert_eq!(parse_layout(v1), None);
+        assert_eq!(parse_layout("not json"), None);
+        assert_eq!(parse_layout(r#"{"version":99,"panels":[]}"#), None);
     }
 }

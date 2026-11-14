@@ -16,8 +16,9 @@ use super::helpers::{
     default_freq_for_band, option_from_str, parse_mhz_to_hz, station_call_from_config,
 };
 use super::focus::focus_call;
-use super::layout::{configuration_from_tree, save_layout, tree_from_state};
+use super::layout::save_layout;
 use super::message::{DupeMatch, LogbookSearchResult, Message};
+use super::panels::Panels;
 use super::services::{format_multi_summary, run_services_update};
 use super::spots::build_worked_by_band;
 use super::state::App;
@@ -44,15 +45,8 @@ impl App {
                 self.so2r_status = bundle.so2r_status;
                 self.so2r_handle = bundle.so2r_handle;
                 self.config = Some(bundle.config);
-                // Restore a saved pane layout if present. If the saved
-                // tree references a PaneKind that no longer exists in the
-                // current build, configuration_from_tree just builds the
-                // tree it sees — operators editing the JSON manually take
-                // their own risk.
-                if let Some(tree) = bundle.pane_layout {
-                    self.panes = pane_grid::State::with_configuration(
-                        configuration_from_tree(&tree),
-                    );
+                if let Some(saved) = bundle.panel_layout {
+                    self.panels = Panels::from_saved(saved);
                 }
                 // Land with the cursor in the Call field: the operator can
                 // start typing the moment the window appears.
@@ -387,41 +381,53 @@ impl App {
                 // Future: track focused pane for keyboard navigation.
                 Task::none()
             }
+            // pane_grid events come only from the QSL and Logbook views;
+            // Operating uses free-floating panels instead.
             Message::PaneDragged(pane_grid::DragEvent::Dropped { pane, target }) => {
-                // Route to whichever view's pane_grid is currently
-                // visible. Pane IDs are per-State, so events can only
-                // refer to the current view's grid.
                 match self.current_view {
-                    super::views::ViewKind::Operating => self.panes.drop(pane, target),
-                    super::views::ViewKind::Logbook => {
-                        self.logbook_panes.drop(pane, target)
-                    }
+                    super::views::ViewKind::Logbook => self.logbook_panes.drop(pane, target),
                     super::views::ViewKind::Qsl => self.qsl_panes.drop(pane, target),
+                    super::views::ViewKind::Operating => {}
                 }
-                self.schedule_layout_save()
+                Task::none()
             }
             Message::PaneDragged(_) => Task::none(),
             Message::PaneResized(pane_grid::ResizeEvent { split, ratio }) => {
                 match self.current_view {
-                    super::views::ViewKind::Operating => {
-                        self.panes.resize(split, ratio)
-                    }
-                    super::views::ViewKind::Logbook => {
-                        self.logbook_panes.resize(split, ratio)
-                    }
-                    super::views::ViewKind::Qsl => {
-                        self.qsl_panes.resize(split, ratio)
-                    }
+                    super::views::ViewKind::Logbook => self.logbook_panes.resize(split, ratio),
+                    super::views::ViewKind::Qsl => self.qsl_panes.resize(split, ratio),
+                    super::views::ViewKind::Operating => {}
                 }
-                self.schedule_layout_save()
+                Task::none()
             }
-            Message::LayoutSaveTick(generation) => {
-                if generation == self.layout_save_gen {
-                    let tree = tree_from_state(&self.panes);
-                    Task::perform(save_layout(tree), |()| Message::LayoutSaveCompleted)
+
+            // ---- Operating panels ----
+            Message::PanelPressed(kind) => {
+                self.panels.raise(kind);
+                Task::none()
+            }
+            Message::PanelDragStarted { kind, mode, canvas } => {
+                self.panels.start_drag(kind, mode, canvas);
+                Task::none()
+            }
+            Message::PanelPointerMoved(position) => {
+                self.panels.drag_to(position);
+                Task::none()
+            }
+            Message::PanelPointerReleased => {
+                if self.panels.end_drag() {
+                    self.save_panel_layout()
                 } else {
                     Task::none()
                 }
+            }
+            Message::PanelToggled(kind) => {
+                self.panels.toggle(kind);
+                self.save_panel_layout()
+            }
+            Message::PanelsReset => {
+                self.panels.reset();
+                self.save_panel_layout()
             }
             Message::LayoutSaveCompleted => Task::none(),
 
@@ -901,20 +907,9 @@ impl App {
         )
     }
 
-    /// Schedules a debounced layout save. Bumps the generation, then
-    /// waits 500ms; if no further resize/drag bumps the generation, the
-    /// tick handler actually writes the file. 500ms is comfortably long
-    /// enough to coalesce a multi-pixel drag into one save.
-    fn schedule_layout_save(&mut self) -> Task<Message> {
-        self.layout_save_gen = self.layout_save_gen.wrapping_add(1);
-        let generation = self.layout_save_gen;
-        Task::perform(
-            async move {
-                tokio::time::sleep(Duration::from_millis(500)).await;
-                generation
-            },
-            Message::LayoutSaveTick,
-        )
+    /// Persists the current panel arrangement.
+    fn save_panel_layout(&self) -> Task<Message> {
+        Task::perform(save_layout(self.panels.to_saved()), |()| Message::LayoutSaveCompleted)
     }
 
     /// Schedules a debounced dupe-check for the current (call, band).

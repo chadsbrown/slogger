@@ -5,7 +5,7 @@ mod focus;
 mod helpers;
 mod layout;
 mod message;
-mod panes;
+mod panels;
 mod services;
 mod spots;
 mod state;

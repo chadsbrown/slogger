@@ -16,7 +16,7 @@ use super::constants::SPOT_HISTORY_LIMIT;
 use super::drawers::awards::AwardsDrawerState;
 use super::drawers::logbook::LogbookSearchState;
 use super::message::{DupeMatch, Message, MultiUpdateSummary};
-use super::panes::{PaneKind, default_pane_configuration};
+use super::panels::Panels;
 use super::types::RigEntry;
 use super::views::ViewKind;
 use super::views::logbook::{LogbookPaneKind, default_logbook_configuration};
@@ -96,11 +96,9 @@ pub struct App {
 
     pub(super) status: Option<String>,
 
-    /// pane_grid layout state. Each pane carries a `PaneKind` identifying
-    /// which content (spots/entry/station/recent) to render. iced hands us
-    /// opaque `pane_grid::Pane` handles in drag/resize events; we map them
-    /// back to PaneKind via `state.get(...)`.
-    pub(super) panes: pane_grid::State<PaneKind>,
+    /// The Operating view's free-floating panels: where each one sits,
+    /// which are open, their stacking order, and any drag in progress.
+    pub(super) panels: Panels,
 
     /// Generation counter for the dupe-check debounce. Every keystroke /
     /// band change increments this; pending async checks tag their result
@@ -111,11 +109,6 @@ pub struct App {
     /// either no match in the log, or the operator hasn't typed enough to
     /// resolve a callsign yet.
     pub(super) dupe_match: Option<DupeMatch>,
-
-    /// Generation counter for the debounced layout save. Every pane
-    /// resize / drag increments this; an in-flight save tick whose
-    /// generation has been superseded is dropped.
-    pub(super) layout_save_gen: u64,
 
     /// Logbook drawer state — filter form values, last search results,
     /// per-row selection, bulk-action status. Lives on App so the drawer
@@ -202,10 +195,9 @@ impl App {
             so2r_handle: None,
             worked_by_band: Default::default(),
             status: None,
-            panes: pane_grid::State::with_configuration(default_pane_configuration()),
+            panels: Panels::default(),
             dupe_check_gen: 0,
             dupe_match: None,
-            layout_save_gen: 0,
             logbook_search: LogbookSearchState::default(),
             awards_drawer: AwardsDrawerState::default(),
             current_view: ViewKind::default(),

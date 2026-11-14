@@ -6,6 +6,7 @@ use wsjtx_bridge::WsjtxMessage;
 
 use super::drawers::awards::{AwardKind, TargetUnit};
 use super::drawers::logbook::{BandFilter, LotwFilter, ModeFilter};
+use super::panels::{DragMode, PanelKind};
 use super::types::{BootBundle, StationOption, TaggedRigSnapshot};
 use super::views::ViewKind;
 use keyer_control::KeyerSnapshot;
@@ -63,14 +64,29 @@ pub enum Message {
         generation: u64,
         dupe: Option<DupeMatch>,
     },
-    /// Debounced tick fired after a pane resize/drag. Carries the
-    /// generation that scheduled it; the handler saves only if the
-    /// generation still matches `App.layout_save_gen`.
-    LayoutSaveTick(u64),
-    /// Fired when the async file write finishes. No state change; the
+    /// Fired when the async layout write finishes. No state change; the
     /// variant exists because iced `Task::perform` requires the future's
     /// result to be mapped to a Message.
     LayoutSaveCompleted,
+
+    // ---- Operating panels ----
+    /// A panel was clicked somewhere inert: bring it to the front.
+    PanelPressed(PanelKind),
+    /// The pointer went down on a panel's title bar (move) or corner
+    /// grip (resize). `canvas` is the canvas size at that moment.
+    PanelDragStarted {
+        kind: PanelKind,
+        mode: DragMode,
+        canvas: iced::Size,
+    },
+    /// Pointer moved while a panel drag is in progress (window coords).
+    PanelPointerMoved(iced::Point),
+    /// Pointer released: the drag, if any, is over.
+    PanelPointerReleased,
+    /// Open a closed panel or close an open one.
+    PanelToggled(PanelKind),
+    /// Put every panel back to its default place, size and visibility.
+    PanelsReset,
 
     // ---- Logbook drawer ----
     LogbookCallPrefixChanged(String),

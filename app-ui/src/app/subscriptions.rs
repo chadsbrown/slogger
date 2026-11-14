@@ -42,6 +42,11 @@ impl App {
         let mut subs = Vec::with_capacity(7);
         subs.push(iced::event::listen_with(key_event));
         subs.push(iced::time::every(std::time::Duration::from_secs(1)).map(|_| Message::Tick));
+        // Pointer tracking is only subscribed while a panel is being
+        // dragged, so idle mouse movement costs nothing.
+        if self.panels.is_dragging() {
+            subs.push(iced::event::listen_with(panel_drag_event));
+        }
         if self.spots_active {
             subs.push(Subscription::run(spot_events_stream).map(Message::SpotEvent));
         }
@@ -86,6 +91,26 @@ fn key_event(
                 .iter()
                 .find(|v| v.shortcut_digit() == c)
                 .map(|v| Message::ViewChanged(*v))
+        }
+        _ => None,
+    }
+}
+
+/// Follows the pointer for a panel move/resize. Listens at the window
+/// level (not on the panel) so the drag keeps tracking when the pointer
+/// outruns the panel or leaves the canvas, and always sees the release.
+fn panel_drag_event(
+    event: iced::Event,
+    _status: iced::event::Status,
+    _window: iced::window::Id,
+) -> Option<Message> {
+    use iced::mouse::{Button, Event};
+    match event {
+        iced::Event::Mouse(Event::CursorMoved { position }) => {
+            Some(Message::PanelPointerMoved(position))
+        }
+        iced::Event::Mouse(Event::ButtonReleased(Button::Left) | Event::CursorLeft) => {
+            Some(Message::PanelPointerReleased)
         }
         _ => None,
     }

@@ -168,6 +168,47 @@ pub(super) fn title_bar_style(theme: &Theme) -> container::Style {
     }
 }
 
+/// A floating panel: opaque (panels can overlap) with a border strong
+/// enough to separate it from whatever it sits on.
+pub(super) fn panel_style(theme: &Theme) -> container::Style {
+    let ext = theme.extended_palette();
+    container::Style {
+        background: Some(ext.background.base.color.into()),
+        border: Border {
+            color: ext.background.strong.color,
+            width: 1.0,
+            radius: 4.0.into(),
+        },
+        shadow: iced::Shadow {
+            color: Color { a: 0.35, ..Color::BLACK },
+            offset: iced::Vector::new(0.0, 2.0),
+            blur_radius: 8.0,
+        },
+        ..container::Style::default()
+    }
+}
+
+/// The canvas the floating panels sit on: slightly darker than a panel.
+pub(super) fn canvas_style(theme: &Theme) -> container::Style {
+    let base = theme.extended_palette().background.base.color;
+    container::Style {
+        background: Some(
+            Color {
+                r: base.r * 0.75,
+                g: base.g * 0.75,
+                b: base.b * 0.75,
+                a: 1.0,
+            }
+            .into(),
+        ),
+        border: Border {
+            radius: 4.0.into(),
+            ..Border::default()
+        },
+        ..container::Style::default()
+    }
+}
+
 /// Quiet strip used for the bottom status bar and the awards readout.
 pub(super) fn strip_style(theme: &Theme) -> container::Style {
     let ext = theme.extended_palette();

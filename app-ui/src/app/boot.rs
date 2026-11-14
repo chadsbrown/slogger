@@ -152,7 +152,7 @@ pub(super) async fn boot_app() -> Result<BootBundle, String> {
     // split in `App::init`. We do this synchronously inside the async
     // boot since std::fs::read_to_string is cheap and avoids a separate
     // await point in update().
-    let pane_layout = load_layout();
+    let panel_layout = load_layout();
 
     Ok(BootBundle {
         service,
@@ -172,7 +172,7 @@ pub(super) async fn boot_app() -> Result<BootBundle, String> {
         so2r_active,
         so2r_status,
         so2r_handle,
-        pane_layout,
+        panel_layout,
     })
 }
 
