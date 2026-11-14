@@ -382,8 +382,9 @@ impl App {
                 }
                 Task::none()
             }
-            Message::SpotEvent(SpotEvent::Withdrawn { call }) => {
-                self.spots.retain(|s| s.call != call);
+            Message::SpotEvent(SpotEvent::Withdrawn { call, freq_hz }) => {
+                self.spots
+                    .retain(|s| !(s.call == call && s.freq_hz == freq_hz));
                 Task::none()
             }
             Message::SpotEvent(SpotEvent::SourceStatus { source_id, status }) => {

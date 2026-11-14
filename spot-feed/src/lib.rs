@@ -4,6 +4,7 @@
 //! `mpsc::Receiver<SpotEvent>` and drain it however they like (iced
 //! subscription, log writer, scoring engine).
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
@@ -23,8 +24,11 @@ pub struct Spot {
 pub enum SpotEvent {
     /// New or updated spot.
     Spot(Spot),
-    /// Cluster withdrew a spot (DX*Sh entry expired or replaced).
-    Withdrawn { call: String },
+    /// A spot previously sent as [`SpotEvent::Spot`] is gone (expired,
+    /// moved, evicted, or about to be replaced by an updated copy).
+    /// Identifies exactly that spot: the same call on another band or
+    /// frequency is a different spot and stays.
+    Withdrawn { call: String, freq_hz: u64 },
     /// Source connection state change. Useful for "are we live?" UI badge.
     SourceStatus { source_id: String, status: String },
     /// Soft error from the feed. Don't crash the adapter on these.
@@ -103,8 +107,9 @@ pub async fn spawn_spot_feed(config: &SpotFeedConfig) -> Result<mpsc::Receiver<S
 
     let (tx, rx) = mpsc::channel::<SpotEvent>(CHANNEL_DEPTH);
     tokio::spawn(async move {
+        let mut tracker = SpotTracker::default();
         while let Some(event) = feed.next_event().await {
-            for translated in translate(event) {
+            for translated in tracker.translate(event) {
                 if tx.send(translated).await.is_err() {
                     return; // receiver dropped
                 }
@@ -116,33 +121,73 @@ pub async fn spawn_spot_feed(config: &SpotFeedConfig) -> Result<mpsc::Receiver<S
     Ok(rx)
 }
 
-fn translate(event: dxfeed::model::DxEvent) -> Vec<SpotEvent> {
-    use dxfeed::model::{DxEvent, SpotEventKind};
-    match event {
-        DxEvent::Spot(spot_event) => match spot_event.kind {
-            SpotEventKind::New | SpotEventKind::Update => {
-                vec![SpotEvent::Spot(Spot {
-                    call: spot_event.spot.dx_call,
-                    freq_hz: spot_event.spot.freq_hz,
-                    mode: dxmode_to_str(spot_event.spot.mode).map(String::from),
-                    comment: spot_event.spot.comment,
-                    spotted_at: spot_event.spot.last_seen,
-                })]
+/// Translates dxfeed events into panel events.
+///
+/// dxfeed identifies a spot by call, band, mode and a frequency anchor,
+/// and guarantees that every `New` is followed by exactly one `Withdraw`
+/// for the same key. The panel knows a spot only by call and frequency,
+/// and the frequency on an `Update` or `Withdraw` is the latest one
+/// reported, which can differ from the one sent earlier. So this
+/// remembers what was sent for each key and withdraws exactly that: the
+/// panel holds one row per dxfeed spot, and a call spotted on two bands
+/// keeps its other row when one goes away.
+#[derive(Default)]
+struct SpotTracker {
+    /// Call and frequency last sent to the panel for each live key.
+    sent: HashMap<dxfeed::model::SpotKey, (String, u64)>,
+}
+
+impl SpotTracker {
+    fn translate(&mut self, event: dxfeed::model::DxEvent) -> Vec<SpotEvent> {
+        use dxfeed::model::{DxEvent, SpotEventKind};
+        match event {
+            DxEvent::Spot(spot_event) => {
+                let key = spot_event.spot.spot_key.clone();
+                match spot_event.kind {
+                    SpotEventKind::New | SpotEventKind::Update => {
+                        let spot = Spot {
+                            call: spot_event.spot.dx_call,
+                            freq_hz: spot_event.spot.freq_hz,
+                            mode: dxmode_to_str(spot_event.spot.mode).map(String::from),
+                            comment: spot_event.spot.comment,
+                            spotted_at: spot_event.spot.last_seen,
+                        };
+                        let previous = self.sent.insert(key, (spot.call.clone(), spot.freq_hz));
+                        let mut out = Vec::new();
+                        // Replace rather than add, so an updated spot
+                        // does not pile up duplicate rows.
+                        if let Some((call, freq_hz)) = previous {
+                            out.push(SpotEvent::Withdrawn { call, freq_hz });
+                        }
+                        out.push(SpotEvent::Spot(spot));
+                        out
+                    }
+                    SpotEventKind::Withdraw => {
+                        tracing::debug!(
+                            call = %spot_event.spot.dx_call,
+                            freq_hz = spot_event.spot.freq_hz,
+                            reason = ?spot_event.withdraw_reason,
+                            "dxfeed withdraw"
+                        );
+                        match self.sent.remove(&key) {
+                            Some((call, freq_hz)) => {
+                                vec![SpotEvent::Withdrawn { call, freq_hz }]
+                            }
+                            // Never sent to the panel: nothing to remove.
+                            None => Vec::new(),
+                        }
+                    }
+                }
             }
-            SpotEventKind::Withdraw => {
-                vec![SpotEvent::Withdrawn {
-                    call: spot_event.spot.dx_call,
-                }]
-            }
-        },
-        DxEvent::SourceStatus(status) => vec![SpotEvent::SourceStatus {
-            source_id: status.source_id.0,
-            status: format!("{:?}", status.state),
-        }],
-        DxEvent::Error(err) => vec![SpotEvent::Error {
-            message: err.message,
-        }],
-        _ => Vec::new(),
+            DxEvent::SourceStatus(status) => vec![SpotEvent::SourceStatus {
+                source_id: status.source_id.0,
+                status: format!("{:?}", status.state),
+            }],
+            DxEvent::Error(err) => vec![SpotEvent::Error {
+                message: err.message,
+            }],
+            _ => Vec::new(),
+        }
     }
 }
 
@@ -161,6 +206,97 @@ fn dxmode_to_str(mode: dxfeed::domain::DxMode) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use dxfeed::domain::{Band, DxMode};
+    use dxfeed::model::{
+        DxEvent, DxSpot, DxSpotEvent, SpotConfidence, SpotEventKind, SpotKey, WithdrawReason,
+    };
+
+    /// A dxfeed event for `call` whose key is anchored at `anchor_hz` and
+    /// whose latest reported frequency is `freq_hz`.
+    fn spot_event(
+        call: &str,
+        band: Band,
+        anchor_hz: u64,
+        freq_hz: u64,
+        kind: SpotEventKind,
+    ) -> DxEvent {
+        let now = Utc::now();
+        DxEvent::Spot(DxSpotEvent {
+            spot: DxSpot {
+                spot_key: SpotKey {
+                    dx_call_norm: call.to_string(),
+                    band,
+                    mode: DxMode::CW,
+                    freq_bucket_hz: anchor_hz,
+                },
+                dx_call: call.to_string(),
+                freq_hz,
+                band,
+                mode: DxMode::CW,
+                first_seen: now,
+                last_seen: now,
+                spot_time: None,
+                comment: None,
+                observations: Vec::new(),
+                unique_originators: 1,
+                unique_sources: 1,
+                skim_quality: None,
+                quality_detail: None,
+                confidence: SpotConfidence::default(),
+            },
+            kind,
+            revision: 1,
+            withdraw_reason: (kind == SpotEventKind::Withdraw).then_some(WithdrawReason::Expired),
+        })
+    }
+
+    /// Compact view of translated events: `+CALL@hz` / `-CALL@hz`.
+    fn summary(events: Vec<SpotEvent>) -> Vec<String> {
+        events
+            .into_iter()
+            .map(|e| match e {
+                SpotEvent::Spot(s) => format!("+{}@{}", s.call, s.freq_hz),
+                SpotEvent::Withdrawn { call, freq_hz } => format!("-{call}@{freq_hz}"),
+                other => format!("{other:?}"),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn update_replaces_the_row_it_updates() {
+        let mut t = SpotTracker::default();
+        let new = t.translate(spot_event("K1ABC", Band::B20, 14_025_000, 14_025_000, SpotEventKind::New));
+        assert_eq!(summary(new), ["+K1ABC@14025000"]);
+        // Same key, slightly different reported frequency.
+        let update =
+            t.translate(spot_event("K1ABC", Band::B20, 14_025_000, 14_025_100, SpotEventKind::Update));
+        assert_eq!(summary(update), ["-K1ABC@14025000", "+K1ABC@14025100"]);
+    }
+
+    #[test]
+    fn withdraw_removes_only_that_spot() {
+        let mut t = SpotTracker::default();
+        t.translate(spot_event("K1ABC", Band::B20, 14_025_000, 14_025_000, SpotEventKind::New));
+        t.translate(spot_event("K1ABC", Band::B40, 7_010_000, 7_010_000, SpotEventKind::New));
+        // The withdraw reports a drifted frequency; the row sent earlier
+        // is the one that must go.
+        let gone =
+            t.translate(spot_event("K1ABC", Band::B20, 14_025_000, 14_025_200, SpotEventKind::Withdraw));
+        assert_eq!(summary(gone), ["-K1ABC@14025000"]);
+        // The 40m spot is still tracked and withdraws on its own.
+        let gone =
+            t.translate(spot_event("K1ABC", Band::B40, 7_010_000, 7_010_000, SpotEventKind::Withdraw));
+        assert_eq!(summary(gone), ["-K1ABC@7010000"]);
+    }
+
+    #[test]
+    fn withdraw_of_an_unknown_spot_is_ignored() {
+        let mut t = SpotTracker::default();
+        let gone =
+            t.translate(spot_event("K1ABC", Band::B20, 14_025_000, 14_025_000, SpotEventKind::Withdraw));
+        assert!(gone.is_empty());
+    }
 
     #[test]
     fn config_carries_sources() {
