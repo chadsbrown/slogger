@@ -15,37 +15,59 @@ pub(super) enum SpotStatus {
 
 pub(super) fn status_label(s: SpotStatus) -> &'static str {
     match s {
-        SpotStatus::Unknown => "  ?",
+        SpotStatus::Unknown => "",
         SpotStatus::Worked => "wkd",
         SpotStatus::NeededBand => "NEW",
     }
 }
 
+/// Everything the Spots table shows about a spot beyond the raw feed data.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct SpotInfo {
+    pub status: SpotStatus,
+    pub band: Option<Band>,
+    pub dxcc_id: Option<u16>,
+    pub country: Option<String>,
+}
+
+/// Resolves a spot once and derives its band, entity and need status.
+pub(super) fn describe_spot(
+    spot: &Spot,
+    resolver: Option<&dyn Resolver>,
+    worked_by_band: &std::collections::BTreeMap<Band, std::collections::HashSet<u16>>,
+) -> SpotInfo {
+    let band = Band::from_freq_hz(spot.freq_hz as i64);
+    let resolution = resolver.and_then(|r| {
+        let call = Callsign::parse(&spot.call).ok()?;
+        r.resolve(&call)
+    });
+    let dxcc_id = resolution.as_ref().and_then(|r| r.dxcc_id);
+    let country = resolution.and_then(|r| r.country);
+    let status = match (dxcc_id, band) {
+        (Some(id), Some(band)) => {
+            if worked_by_band.get(&band).is_some_and(|set| set.contains(&id)) {
+                SpotStatus::Worked
+            } else {
+                SpotStatus::NeededBand
+            }
+        }
+        _ => SpotStatus::Unknown,
+    };
+    SpotInfo {
+        status,
+        band,
+        dxcc_id,
+        country,
+    }
+}
+
+#[cfg(test)]
 pub(super) fn annotate_spot(
     spot: &Spot,
     resolver: &dyn Resolver,
     worked_by_band: &std::collections::BTreeMap<Band, std::collections::HashSet<u16>>,
 ) -> SpotStatus {
-    let Ok(call) = Callsign::parse(&spot.call) else {
-        return SpotStatus::Unknown;
-    };
-    let Some(res) = resolver.resolve(&call) else {
-        return SpotStatus::Unknown;
-    };
-    let Some(dxcc_id) = res.dxcc_id else {
-        return SpotStatus::Unknown;
-    };
-    let Some(band) = Band::from_freq_hz(spot.freq_hz as i64) else {
-        return SpotStatus::Unknown;
-    };
-    let worked = worked_by_band
-        .get(&band)
-        .is_some_and(|set| set.contains(&dxcc_id));
-    if worked {
-        SpotStatus::Worked
-    } else {
-        SpotStatus::NeededBand
-    }
+    describe_spot(spot, Some(resolver), worked_by_band).status
 }
 
 pub(super) fn build_worked_by_band(

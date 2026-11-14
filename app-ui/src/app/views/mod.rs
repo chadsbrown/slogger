@@ -13,10 +13,11 @@ pub(super) mod logbook;
 pub(super) mod operating;
 pub(super) mod qsl;
 
-use iced::widget::{button, container, row, text};
+use iced::widget::{Space, button, container, row, text};
 use iced::{Element, Length};
 
 use super::message::Message;
+use super::theme;
 
 /// Which view is currently selected. Persistent across the App's
 /// lifetime; not saved to disk (we want a fresh app to land in
@@ -44,22 +45,40 @@ impl ViewKind {
     }
 }
 
-const ALL_VIEWS: &[ViewKind] = &[ViewKind::Operating, ViewKind::Qsl, ViewKind::Logbook];
+impl ViewKind {
+    pub(super) const ALL: &[ViewKind] = &[ViewKind::Operating, ViewKind::Qsl, ViewKind::Logbook];
 
-/// Render the tab bar between the header strip and the main canvas. The
-/// active tab uses the default button style; inactive tabs use the text
-/// style so the bar reads as labels rather than chunky buttons.
-pub(super) fn tab_bar(current: ViewKind) -> Element<'static, Message> {
-    let mut bar = row![].spacing(4);
-    for v in ALL_VIEWS {
-        let is_active = *v == current;
-        let btn = button(text(v.label())).on_press(Message::ViewChanged(*v));
-        let styled = if is_active {
-            btn
-        } else {
-            btn.style(button::text)
-        };
-        bar = bar.push(styled);
+    /// Digit that, with Ctrl held, switches to this view.
+    pub(super) fn shortcut_digit(self) -> &'static str {
+        match self {
+            ViewKind::Operating => "1",
+            ViewKind::Qsl => "2",
+            ViewKind::Logbook => "3",
+        }
     }
-    container(bar).padding(4).width(Length::Fill).into()
+}
+
+/// Render the top bar: view tabs on the left, UTC clock on the right.
+pub(super) fn tab_bar(current: ViewKind) -> Element<'static, Message> {
+    let mut bar = row![].spacing(4).align_y(iced::Alignment::Center);
+    for v in ViewKind::ALL {
+        bar = bar.push(
+            button(
+                row![
+                    text(v.label()).size(14),
+                    theme::label(format!("^{}", v.shortcut_digit())),
+                ]
+                .spacing(6)
+                .align_y(iced::Alignment::Center),
+            )
+            .padding([4, 12])
+            .on_press(Message::ViewChanged(*v))
+            .style(theme::tab_style(*v == current)),
+        );
+    }
+    let clock = text(chrono::Utc::now().format("%Y-%m-%d  %H:%M:%S UTC").to_string())
+        .size(14)
+        .font(theme::MONO);
+    bar = bar.push(Space::new().width(Length::Fill)).push(clock);
+    container(bar).padding([0, 4]).width(Length::Fill).into()
 }

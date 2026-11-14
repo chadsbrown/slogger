@@ -53,14 +53,21 @@ impl App {
                         configuration_from_tree(&tree),
                     );
                 }
-                Task::perform(refresh(bundle.repo, bundle.service), Message::Refreshed)
+                // Land with the cursor in the Call field: the operator can
+                // start typing the moment the window appears.
+                Task::batch([
+                    Task::perform(refresh(bundle.repo, bundle.service), Message::Refreshed),
+                    focus_call(),
+                ])
             }
             Message::Booted(Err(e)) => {
                 self.boot_error = Some(e);
                 Task::none()
             }
             Message::CallChanged(s) => {
-                self.call_input = s;
+                // Callsigns are always upper-case; normalising here means
+                // the operator never has to think about Caps Lock.
+                self.call_input = s.to_ascii_uppercase();
                 self.schedule_dupe_check()
             }
             Message::BandChanged(b) => {
@@ -190,16 +197,23 @@ impl App {
                 Task::none()
             }
             Message::RigSnapshot(tagged) => {
-                if let Some(entry) = self.rigs.get_mut(tagged.rig_index) {
-                    entry.snapshot = Some(tagged.snapshot);
+                let Some(entry) = self.rigs.get_mut(tagged.rig_index) else {
+                    return Task::none();
+                };
+                let previous = entry.snapshot.replace(tagged.snapshot);
+                if tagged.rig_index == self.active_rig {
+                    self.follow_rig(previous.as_ref())
+                } else {
+                    Task::none()
                 }
-                Task::none()
             }
             Message::ActiveRigChanged(idx) => {
                 if idx >= self.rigs.len() {
                     return Task::none();
                 }
                 self.active_rig = idx;
+                // The form now describes a different radio: resync it fully.
+                let follow = self.follow_rig(None);
                 // Active-radio abstraction: when SO2R is configured, the
                 // same click that switches the entry-form / rig-command
                 // target also moves the OTRSP TX line. Otherwise an
@@ -207,7 +221,7 @@ impl App {
                 // tune Radio 2 but transmit on Radio 1 — silent footgun.
                 if let Some(handle) = self.so2r_handle.clone() {
                     let radio = (idx as u8) + 1;
-                    return Task::perform(
+                    let so2r = Task::perform(
                         async move {
                             handle
                                 .set_tx_radio(radio)
@@ -217,8 +231,9 @@ impl App {
                         },
                         Message::SendToRigFinished,
                     );
+                    return Task::batch([follow, so2r]);
                 }
-                Task::none()
+                follow
             }
             Message::UseRigPressed => self.use_rig_now(),
             Message::SendToRigPressed => self.send_to_rig(),
@@ -506,6 +521,27 @@ impl App {
                 }
                 Task::none()
             }
+            Message::Tick => Task::none(),
+            Message::FocusNext => iced::widget::operation::focus_next(),
+            Message::FocusPrevious => iced::widget::operation::focus_previous(),
+            Message::EscapePressed => self.escape(),
+            Message::FunctionKey(n) => match self.keyer_macro(n) {
+                Some((_, text)) if self.keyer_handle.is_some() => {
+                    self.update(Message::KeyerSendMacro(text))
+                }
+                Some(_) => {
+                    self.status = Some(format!("F{n}: keyer not connected"));
+                    Task::none()
+                }
+                None => Task::none(),
+            },
+            Message::KeyerAbortFinished(result) => {
+                self.status = Some(match result {
+                    Ok(()) => "CW aborted".into(),
+                    Err(e) => format!("keyer abort error: {e}"),
+                });
+                Task::none()
+            }
             Message::ViewChanged(view) => {
                 self.current_view = view;
                 // Auto-refresh the QSL Pending pane on first switch
@@ -628,6 +664,58 @@ impl App {
                 }
                 Task::none()
             }
+        }
+    }
+
+    /// Esc. Stops CW first if the keyer is mid-message (the operator's
+    /// reflex when something goes wrong on the air); otherwise, on the
+    /// Operating view, cancels an edit or wipes the call and refocuses it.
+    fn escape(&mut self) -> Task<Message> {
+        let keying = self.keyer_snapshot.as_ref().is_some_and(|s| s.keying);
+        if keying && let Some(handle) = self.keyer_handle.clone() {
+            return Task::perform(
+                async move { handle.abort().await.map_err(|e| e.to_string()) },
+                Message::KeyerAbortFinished,
+            );
+        }
+        if self.current_view != super::views::ViewKind::Operating {
+            return Task::none();
+        }
+        if self.editing_qso.is_some() {
+            return self.update(Message::CancelEditPressed);
+        }
+        self.call_input.clear();
+        self.dupe_match = None;
+        self.dupe_check_gen = self.dupe_check_gen.wrapping_add(1);
+        focus_call()
+    }
+
+    /// The operator's own callsign: active station location first, then
+    /// the `[station]` config fallback.
+    pub(super) fn my_call(&self) -> Option<String> {
+        self.active_location
+            .as_ref()
+            .and_then(|loc| loc.station_callsign.as_ref().map(|c| c.as_str().to_string()))
+            .or_else(|| {
+                self.config
+                    .as_ref()
+                    .and_then(|c| c.station.default_callsign.clone())
+            })
+    }
+
+    /// Keyer macro `n` (bound to F`n`) as `(button label, CW text)`.
+    /// Returns None for an unassigned number, or when the macro needs the
+    /// other station's call and none has been typed yet.
+    pub(super) fn keyer_macro(&self, n: u8) -> Option<(String, String)> {
+        let my_call = self.my_call().unwrap_or_else(|| "<CALL>".into());
+        let his_call = self.call_input.trim();
+        match n {
+            1 => Some(("CQ".into(), format!("CQ CQ DE {my_call} {my_call} K"))),
+            2 if !his_call.is_empty() => {
+                Some((his_call.to_string(), format!("{his_call} DE {my_call}")))
+            }
+            3 => Some(("TU 73".into(), "TU 73".into())),
+            _ => None,
         }
     }
 
@@ -943,6 +1031,52 @@ impl App {
         )
     }
 
+    /// Keeps the entry form tracking the active rig. Called whenever the
+    /// active rig reports a new snapshot; `previous` is the snapshot it
+    /// replaced (None for the first report, or to force a full resync).
+    ///
+    /// Only what actually changed on the rig is copied, so values the
+    /// operator set by hand survive until the rig itself moves:
+    /// picking FT8 in the form sticks while tuning around, because the
+    /// rig's own mode (USB) hasn't changed. Editing a logged QSO pauses
+    /// following entirely — that form describes a past contact.
+    fn follow_rig(&mut self, previous: Option<&RigSnapshot>) -> Task<Message> {
+        if self.editing_qso.is_some() {
+            return Task::none();
+        }
+        let Some(snap) = self.active_rig_snapshot().cloned() else {
+            return Task::none();
+        };
+        let mut band_changed = false;
+        if let Some(hz) = snap.freq_hz
+            && previous.and_then(|p| p.freq_hz) != Some(hz)
+        {
+            self.freq_input = format!("{:.5}", hz as f64 / 1_000_000.0);
+            if let Some(band) = Band::from_freq_hz(hz as i64)
+                && self.band != Some(band)
+            {
+                self.band = Some(band);
+                band_changed = true;
+            }
+        }
+        if let Some(mode_str) = snap.mode.as_deref()
+            && previous.and_then(|p| p.mode.as_deref()) != Some(mode_str)
+        {
+            // A rig mode with no logbook equivalent would blank the picker;
+            // leave the operator's choice alone instead.
+            let mode = Mode::from_adif(mode_str);
+            if !matches!(mode, Mode::Other(_)) {
+                self.mode = Some(mode);
+            }
+        }
+        if band_changed {
+            // Dupe status is per band.
+            self.schedule_dupe_check()
+        } else {
+            Task::none()
+        }
+    }
+
     /// Copy the active rig's state into the entry form. Doesn't touch
     /// `call_input` (that's the operator's working call) or RST fields.
     fn use_rig_now(&mut self) -> Task<Message> {
@@ -1098,5 +1232,71 @@ impl App {
             run_services_update(repo, cfg),
             Message::ServicesUpdateFinished,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::types::RigEntry;
+
+    fn snapshot(freq_hz: u64, mode: &str) -> RigSnapshot {
+        RigSnapshot {
+            vendor: "icom".into(),
+            model: "IC-7300".into(),
+            freq_hz: Some(freq_hz),
+            mode: Some(mode.into()),
+            at: Utc::now(),
+        }
+    }
+
+    fn app_with_rig() -> App {
+        let (mut app, _) = App::init();
+        app.rigs.push(RigEntry {
+            label: "Main".into(),
+            config: Default::default(),
+            handle: None,
+            snapshot: None,
+            status: String::new(),
+        });
+        app
+    }
+
+    fn report(app: &mut App, freq_hz: u64, mode: &str) {
+        let _ = app.update(Message::RigSnapshot(crate::app::types::TaggedRigSnapshot {
+            rig_index: 0,
+            snapshot: snapshot(freq_hz, mode),
+        }));
+    }
+
+    #[test]
+    fn form_follows_rig_frequency_band_and_mode() {
+        let mut app = app_with_rig();
+        report(&mut app, 7_005_000, "CW");
+        assert_eq!(app.freq_input, "7.00500");
+        assert_eq!(app.band, Some(Band::M40));
+        assert_eq!(app.mode, Some(Mode::CW));
+    }
+
+    #[test]
+    fn hand_picked_mode_survives_tuning_until_rig_mode_changes() {
+        let mut app = app_with_rig();
+        report(&mut app, 14_074_000, "USB");
+        app.mode = Some(Mode::FT8);
+        report(&mut app, 14_076_000, "USB");
+        assert_eq!(app.freq_input, "14.07600");
+        assert_eq!(app.mode, Some(Mode::FT8));
+        report(&mut app, 14_030_000, "CW");
+        assert_eq!(app.mode, Some(Mode::CW));
+    }
+
+    #[test]
+    fn form_does_not_follow_rig_while_editing_a_qso() {
+        let mut app = app_with_rig();
+        report(&mut app, 14_074_000, "USB");
+        app.editing_qso = Some(QsoId::new());
+        report(&mut app, 7_005_000, "CW");
+        assert_eq!(app.freq_input, "14.07400");
+        assert_eq!(app.band, Some(Band::M20));
     }
 }

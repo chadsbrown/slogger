@@ -11,6 +11,7 @@ use wsjtx_bridge::WsjtxMessage;
 use super::message::Message;
 use super::state::App;
 use super::types::TaggedRigSnapshot;
+use super::views::ViewKind;
 
 /// Receiver-stash for the spot feed. iced 0.14's `Subscription::run`
 /// takes a `fn` pointer, so the streaming closure can't capture state —
@@ -38,7 +39,9 @@ pub(super) static SO2R_RX: OnceLock<Mutex<Option<mpsc::Receiver<So2rSnapshot>>>>
 
 impl App {
     pub fn subscription(&self) -> Subscription<Message> {
-        let mut subs = Vec::with_capacity(3);
+        let mut subs = Vec::with_capacity(7);
+        subs.push(iced::event::listen_with(key_event));
+        subs.push(iced::time::every(std::time::Duration::from_secs(1)).map(|_| Message::Tick));
         if self.spots_active {
             subs.push(Subscription::run(spot_events_stream).map(Message::SpotEvent));
         }
@@ -55,6 +58,36 @@ impl App {
             subs.push(Subscription::run(so2r_events_stream).map(Message::So2rSnapshotMsg));
         }
         Subscription::batch(subs)
+    }
+}
+
+/// Global keyboard layer. Runs for every key press whether or not a widget
+/// captured it, so the shortcuts work while a text field has focus.
+fn key_event(
+    event: iced::Event,
+    _status: iced::event::Status,
+    _window: iced::window::Id,
+) -> Option<Message> {
+    use iced::keyboard::key::Named;
+    use iced::keyboard::{Event, Key};
+
+    let iced::Event::Keyboard(Event::KeyPressed { key, modifiers, .. }) = event else {
+        return None;
+    };
+    match key.as_ref() {
+        Key::Named(Named::Escape) => Some(Message::EscapePressed),
+        Key::Named(Named::Tab) if modifiers.shift() => Some(Message::FocusPrevious),
+        Key::Named(Named::Tab) => Some(Message::FocusNext),
+        Key::Named(Named::F1) => Some(Message::FunctionKey(1)),
+        Key::Named(Named::F2) => Some(Message::FunctionKey(2)),
+        Key::Named(Named::F3) => Some(Message::FunctionKey(3)),
+        Key::Character(c) if modifiers.control() => {
+            ViewKind::ALL
+                .iter()
+                .find(|v| v.shortcut_digit() == c)
+                .map(|v| Message::ViewChanged(*v))
+        }
+        _ => None,
     }
 }
 

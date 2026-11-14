@@ -107,6 +107,20 @@ pub enum Message {
     KeyerSendMacro(String),
     KeyerSendFinished(Result<(), String>),
 
+    // ---- Keyboard ----
+    /// Esc: abort CW if the keyer is sending, otherwise cancel the edit /
+    /// wipe the entry form and return focus to the Call field.
+    EscapePressed,
+    /// Tab / Shift+Tab: move focus between text fields.
+    FocusNext,
+    FocusPrevious,
+    /// F1..F3: fire the numbered keyer macro.
+    FunctionKey(u8),
+    KeyerAbortFinished(Result<(), String>),
+    /// One-second heartbeat. Carries no state; it exists so the UTC clock,
+    /// spot ages and rig staleness re-render while the app is otherwise idle.
+    Tick,
+
     // ---- View switching ----
     /// Switch which top-level view (Operating / QSL / Logbook) is shown.
     ViewChanged(ViewKind),

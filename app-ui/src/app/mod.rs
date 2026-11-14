@@ -10,6 +10,7 @@ mod services;
 mod spots;
 mod state;
 mod subscriptions;
+mod theme;
 mod types;
 mod update;
 mod view;
