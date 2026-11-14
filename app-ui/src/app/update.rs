@@ -26,6 +26,20 @@ use super::state::{App, EntryDraft};
 
 impl App {
     pub fn update(&mut self, message: Message) -> Task<Message> {
+        // A modal owns the keyboard: the UI underneath must not send CW,
+        // move focus or switch tabs while it is covered. (Mouse clicks
+        // are already stopped by the modal's backdrop.)
+        if self.modal.is_some()
+            && matches!(
+                message,
+                Message::FunctionKey(_)
+                    | Message::FocusNext
+                    | Message::FocusPrevious
+                    | Message::ViewChanged(_)
+            )
+        {
+            return Task::none();
+        }
         match message {
             Message::Booted(Ok(bundle)) => {
                 self.service = Some(bundle.service.clone());
@@ -555,6 +569,15 @@ impl App {
                 self.theme = t;
                 self.save_panel_layout()
             }
+            Message::OpenModal(modal) => {
+                self.modal = Some(modal);
+                Task::none()
+            }
+            Message::CloseModal => {
+                self.modal = None;
+                Task::none()
+            }
+            Message::ModalClicked => Task::none(),
             Message::FocusNext => iced::widget::operation::focus_next(),
             Message::FocusPrevious => iced::widget::operation::focus_previous(),
             Message::EscapePressed => self.escape(),
@@ -758,6 +781,9 @@ impl App {
         let keying = self.keyer_snapshot.as_ref().is_some_and(|s| s.keying);
         if keying && self.keyer_handle.is_some() {
             return self.abort_cw();
+        }
+        if self.modal.take().is_some() {
+            return Task::none();
         }
         if self.current_view != super::views::ViewKind::Operating {
             return Task::none();
@@ -1512,5 +1538,26 @@ mod tests {
 
         assert!(app.editing_qso.is_none());
         assert_eq!(app.call_input, "K1ABC");
+    }
+
+    #[test]
+    fn escape_closes_an_open_modal_and_nothing_else() {
+        let (mut app, _) = App::init();
+        app.call_input = "K1ABC".into();
+        app.modal = Some(crate::app::modals::Modal::ThemePicker);
+
+        let _ = app.update(Message::EscapePressed);
+        assert!(app.modal.is_none());
+        assert_eq!(app.call_input, "K1ABC", "the form under the modal is untouched");
+    }
+
+    #[test]
+    fn a_modal_blocks_keyboard_shortcuts_for_the_ui_underneath() {
+        let (mut app, _) = App::init();
+        app.modal = Some(crate::app::modals::Modal::ThemePicker);
+
+        let _ = app.update(Message::ViewChanged(super::super::views::ViewKind::Logbook));
+        assert_eq!(app.current_view, super::super::views::ViewKind::Operating);
+        assert!(app.modal.is_some());
     }
 }

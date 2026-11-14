@@ -74,6 +74,8 @@ pub struct App {
     pub(super) theme: iced::Theme,
     /// Whole-UI scale factor (the A− / A+ buttons). 1.0 is normal size.
     pub(super) font_scale: f32,
+    /// The modal dialog currently open over the UI, if any.
+    pub(super) modal: Option<super::modals::Modal>,
     /// What the entry form held before the current edit began. Editing a
     /// QSO borrows the one shared form, so this is put back when the edit
     /// ends — a logbook lookup never disturbs a QSO in progress.
@@ -183,6 +185,7 @@ impl App {
             editing_qso: None,
             theme: super::theme::app_theme(),
             font_scale: 1.0,
+            modal: None,
             entry_draft: None,
             station_locations: vec![],
             active_location: None,

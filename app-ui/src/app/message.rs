@@ -74,6 +74,11 @@ pub enum Message {
     FontScaleDown,
     FontScaleReset,
     ThemeSelected(iced::Theme),
+    OpenModal(super::modals::Modal),
+    CloseModal,
+    /// A click inside an open modal that hit no control. Does nothing; it
+    /// exists so the click is not passed on to the backdrop.
+    ModalClicked,
 
     // ---- Operating panels ----
     /// A panel was clicked somewhere inert: bring it to the front.

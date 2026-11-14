@@ -41,7 +41,11 @@ impl App {
         };
 
         let body = column![tabs, view_body, self.status_bar()].spacing(6);
-        container(body).padding(8).into()
+        let main: Element<'_, Message> = container(body).padding(8).into();
+        match &self.modal {
+            Some(modal) => super::modals::overlay(main, self, modal),
+            None => main,
+        }
     }
 
     /// Persistent bottom status bar. Left: the station selector and the
@@ -99,14 +103,10 @@ impl App {
             size_button("A−", Message::FontScaleDown),
             size_button("A+", Message::FontScaleUp),
             theme::label("THEME"),
-            pick_list(
-                theme::all_themes(),
-                Some(self.theme.clone()),
-                Message::ThemeSelected,
-            )
-            .text_size(13)
-            .padding([2, 8])
-            .width(Length::Fixed(170.0)),
+            button(text(self.theme.to_string()).size(13))
+                .padding([2, 8])
+                .on_press(Message::OpenModal(super::modals::Modal::ThemePicker))
+                .style(theme::tab_style(false)),
         ]
         .spacing(6)
         .align_y(iced::Alignment::Center);
