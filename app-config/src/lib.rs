@@ -190,6 +190,12 @@ pub struct RigConfig {
     /// Optional friendly label for multi-rig setups (e.g. "Main", "Aux",
     /// "Run", "Mult"). Defaults to the model name when unset.
     pub label: Option<String>,
+    /// How slogger learns that the operator turned the VFO knob.
+    /// `false` (default): poll the rig at 4 Hz. `true`: listen for the
+    /// rig's own broadcasts and do not poll — auto-information on
+    /// Yaesu/Kenwood/Elecraft (enabled for you at connect), CI-V
+    /// Transceive on Icom (you must also turn it on in the rig's menu).
+    pub transceive: bool,
 }
 
 impl RigConfig {

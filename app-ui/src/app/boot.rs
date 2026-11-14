@@ -290,6 +290,7 @@ fn build_rig_client_config(cfg: &RigConfigToml) -> Option<RigClientConfig> {
         model: cfg.model.clone()?,
         baud_rate: cfg.baud_rate,
         host: cfg.host.clone(),
+        transceive: cfg.transceive,
     })
 }
 

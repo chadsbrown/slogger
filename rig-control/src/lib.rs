@@ -42,6 +42,10 @@ pub struct RigConfig {
     /// FlexRadio: hostname or IP. Required for flex; ignored for serial
     /// vendors. Default port (4992) is used if not overridden.
     pub host: Option<String>,
+    /// How dial changes reach us. `false` (default): poll frequency and
+    /// mode at 4 Hz. `true`: rely on the rig's own broadcasts
+    /// (auto-information / CI-V Transceive) and do not poll.
+    pub transceive: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -161,6 +165,22 @@ fn mode_from_adif(s: &str) -> Option<riglib::Mode> {
 
 const SNAPSHOT_DEPTH: usize = 16;
 
+/// Poll rate when `transceive` is off — 4 Hz, the same as clogger.
+const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
+/// Consecutive unanswered frequency polls before the rig is treated as
+/// gone and the reconnect loop takes over (~3 s).
+const POLL_FAILURES_BEFORE_RECONNECT: u32 = 12;
+
+/// Resolves at the next poll tick, or never when polling is off.
+async fn next_poll(poll: &mut Option<tokio::time::Interval>) {
+    match poll {
+        Some(interval) => {
+            interval.tick().await;
+        }
+        None => std::future::pending().await,
+    }
+}
+
 /// Connect to the rig and spawn a forwarder task. Returns a receiver of
 /// `RigSnapshot` plus a `RigHandle` for issuing set commands.
 ///
@@ -238,16 +258,70 @@ pub async fn connect(
             // Subscribe + run forwarding loop until the rig disconnects.
             match rig.subscribe() {
                 Ok(mut events) => {
-                    while let Ok(event) = events.recv().await {
-                        let mut s = snapshot_for_task.lock().await;
-                        apply_event(&mut s, &event);
-                        s.at = Utc::now();
-                        if tx.send(s.clone()).await.is_err() {
-                            return;
+                    use tokio::sync::broadcast::error::RecvError;
+                    // Without transceive the rig says nothing when the
+                    // operator turns the knob, so ask it.
+                    let mut poll = (!cfg_for_task.transceive).then(|| {
+                        let mut i = tokio::time::interval(POLL_INTERVAL);
+                        i.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                        i
+                    });
+                    let mut poll_failures = 0u32;
+                    loop {
+                        tokio::select! {
+                            event = events.recv() => match event {
+                                Ok(event) => {
+                                    let mut s = snapshot_for_task.lock().await;
+                                    apply_event(&mut s, &event);
+                                    s.at = Utc::now();
+                                    if tx.send(s.clone()).await.is_err() {
+                                        return;
+                                    }
+                                }
+                                Err(RecvError::Lagged(_)) => {}
+                                Err(RecvError::Closed) => {
+                                    tracing::warn!("rig event channel closed; will reconnect");
+                                    break;
+                                }
+                            },
+                            _ = next_poll(&mut poll) => {
+                                let freq = rig.get_frequency(ReceiverId::VFO_A).await.ok();
+                                let mode = rig
+                                    .get_mode(ReceiverId::VFO_A)
+                                    .await
+                                    .ok()
+                                    .map(|m| mode_to_str(&m));
+                                if freq.is_none() {
+                                    poll_failures += 1;
+                                    if poll_failures >= POLL_FAILURES_BEFORE_RECONNECT {
+                                        tracing::warn!("rig stopped answering polls; will reconnect");
+                                        break;
+                                    }
+                                    continue;
+                                }
+                                poll_failures = 0;
+                                let mut s = snapshot_for_task.lock().await;
+                                let changed = s.freq_hz != freq
+                                    || (mode.is_some() && s.mode != mode);
+                                s.freq_hz = freq;
+                                if mode.is_some() {
+                                    s.mode = mode;
+                                }
+                                // Send on change, plus a heartbeat so the
+                                // UI's "stale" marker stays clear while
+                                // the dial sits still.
+                                let now = Utc::now();
+                                let heartbeat = (now - s.at).num_seconds() >= 5;
+                                if !changed && !heartbeat {
+                                    continue;
+                                }
+                                s.at = now;
+                                if tx.send(s.clone()).await.is_err() {
+                                    return;
+                                }
+                            }
                         }
                     }
-                    // events.recv() Err = broadcast channel closed = rig gone.
-                    tracing::warn!("rig event channel closed; will reconnect");
                 }
                 Err(e) => {
                     tracing::warn!(error = %format!("{e:?}"), "rig.subscribe() failed");
@@ -282,17 +356,18 @@ async fn seed_initial_state(
     s.at = Utc::now();
 }
 
-/// Yaesu, Kenwood and Elecraft rigs only report dial changes while
-/// auto-information is on, and riglib leaves it off unless asked, so each
-/// of those builders enables it. Without it the only events are echoes of
-/// our own set commands: clicking a spot updates the display but turning
-/// the VFO knob does not. Icom has no equivalent command — the operator
-/// must enable CI-V Transceive in the rig's menu.
+/// `cfg.transceive` is passed to each serial builder's `ai()`. With it
+/// on, Yaesu, Kenwood and Elecraft are sent the auto-information command
+/// at connect; Icom is never reconfigured, so the operator must also
+/// enable CI-V Transceive in the rig's menu. With it off, the forwarding
+/// loop polls instead (see [`POLL_INTERVAL`]).
 async fn build_rig(cfg: &RigConfig) -> Result<Box<dyn Rig + Send + Sync>, ConnectError> {
     match cfg.vendor.to_ascii_lowercase().as_str() {
         "icom" => {
             let model = lookup_icom_model(&cfg.model)?;
-            let mut b = IcomBuilder::new(model).serial_port(&cfg.serial_port);
+            let mut b = IcomBuilder::new(model)
+                .serial_port(&cfg.serial_port)
+                .ai(cfg.transceive);
             if let Some(baud) = cfg.baud_rate {
                 b = b.baud_rate(baud);
             }
@@ -301,7 +376,9 @@ async fn build_rig(cfg: &RigConfig) -> Result<Box<dyn Rig + Send + Sync>, Connec
         }
         "yaesu" => {
             let model = lookup_yaesu_model(&cfg.model)?;
-            let mut b = YaesuBuilder::new(model).serial_port(&cfg.serial_port).ai(true);
+            let mut b = YaesuBuilder::new(model)
+                .serial_port(&cfg.serial_port)
+                .ai(cfg.transceive);
             if let Some(baud) = cfg.baud_rate {
                 b = b.baud_rate(baud);
             }
@@ -310,7 +387,9 @@ async fn build_rig(cfg: &RigConfig) -> Result<Box<dyn Rig + Send + Sync>, Connec
         }
         "kenwood" => {
             let model = lookup_kenwood_model(&cfg.model)?;
-            let mut b = KenwoodBuilder::new(model).serial_port(&cfg.serial_port).ai(true);
+            let mut b = KenwoodBuilder::new(model)
+                .serial_port(&cfg.serial_port)
+                .ai(cfg.transceive);
             if let Some(baud) = cfg.baud_rate {
                 b = b.baud_rate(baud);
             }
@@ -319,7 +398,9 @@ async fn build_rig(cfg: &RigConfig) -> Result<Box<dyn Rig + Send + Sync>, Connec
         }
         "elecraft" => {
             let model = lookup_elecraft_model(&cfg.model)?;
-            let mut b = ElecraftBuilder::new(model).serial_port(&cfg.serial_port).ai(true);
+            let mut b = ElecraftBuilder::new(model)
+                .serial_port(&cfg.serial_port)
+                .ai(cfg.transceive);
             if let Some(baud) = cfg.baud_rate {
                 b = b.baud_rate(baud);
             }
@@ -474,6 +555,7 @@ mod tests {
             serial_port: "/dev/ttyUSB0".into(),
             baud_rate: None,
             host: None,
+            transceive: false,
         };
         // We can't actually call connect() without a serial port present,
         // but the model-lookup paths are easy to exercise individually.

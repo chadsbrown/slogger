@@ -38,6 +38,13 @@
 # serial_port = "/dev/ttyUSB0"  # required for icom/yaesu/kenwood/elecraft
 # baud_rate = 115200             # optional; vendor default if unset
 # label = "Main"                 # optional; defaults to model name
+# transceive = false             # how slogger follows the VFO knob:
+#                                #   false (default) — poll the rig at 4 Hz
+#                                #   true — no polling; listen for the rig's
+#                                #     own broadcasts. Yaesu/Kenwood/Elecraft:
+#                                #     switched on for you at connect. Icom:
+#                                #     also enable CI-V Transceive in the
+#                                #     rig's menu or nothing will update.
 
 # Second rig for SO2R (uncomment + fill):
 # [[rig]]
