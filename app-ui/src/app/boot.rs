@@ -99,6 +99,36 @@ pub(super) async fn boot_app() -> Result<BootBundle, String> {
         (false, None)
     };
 
+    // Hardware connects in the order rigs, keyer, SO2R switch — the order
+    // clogger uses on the same libraries and hardware. slogger used to
+    // connect the switch first and keyed stray CW ("? ?") at startup on a
+    // real station, which clogger does not; the order was the only
+    // difference between the two, so it is the suspected cause.
+    // Multi-rig: iterate every configured rig, connect each, build entries.
+    // A single shared mpsc channel multiplexes all rigs' snapshots; per-rig
+    // forwarder tasks tag snapshots with the rig index before pushing.
+    let rigs = build_rig_entries(&config.rigs).await;
+
+    let (keyer_active, keyer_status, keyer_handle) = if config.keyer.is_configured() {
+        match build_keyer_client_config(&config.keyer) {
+            Some(kc) => match connect_keyer(&kc).await {
+                Ok((rx, handle)) => {
+                    let _ = KEYER_RX.set(Mutex::new(Some(rx)));
+                    let label = format!("WinKeyer on {}", kc.serial_port);
+                    tracing::info!(keyer = %label, "keyer connected");
+                    (true, Some(format!("Keyer: connected to {label}")), Some(handle))
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "keyer connection failed");
+                    (false, Some(format!("Keyer: connect failed — {e}")), None)
+                }
+            },
+            None => (false, Some("Keyer: config incomplete".into()), None),
+        }
+    } else {
+        (false, None, None)
+    };
+
     let (so2r_active, so2r_status, so2r_handle) = if config.so2r.is_configured() {
         match build_so2r_client_config(&config.so2r) {
             Some(sc) => match connect_so2r(&sc).await {
@@ -122,31 +152,6 @@ pub(super) async fn boot_app() -> Result<BootBundle, String> {
     } else {
         (false, None, None)
     };
-
-    let (keyer_active, keyer_status, keyer_handle) = if config.keyer.is_configured() {
-        match build_keyer_client_config(&config.keyer) {
-            Some(kc) => match connect_keyer(&kc).await {
-                Ok((rx, handle)) => {
-                    let _ = KEYER_RX.set(Mutex::new(Some(rx)));
-                    let label = format!("WinKeyer on {}", kc.serial_port);
-                    tracing::info!(keyer = %label, "keyer connected");
-                    (true, Some(format!("Keyer: connected to {label}")), Some(handle))
-                }
-                Err(e) => {
-                    tracing::warn!(error = %e, "keyer connection failed");
-                    (false, Some(format!("Keyer: connect failed — {e}")), None)
-                }
-            },
-            None => (false, Some("Keyer: config incomplete".into()), None),
-        }
-    } else {
-        (false, None, None)
-    };
-
-    // Multi-rig: iterate every configured rig, connect each, build entries.
-    // A single shared mpsc channel multiplexes all rigs' snapshots; per-rig
-    // forwarder tasks tag snapshots with the rig index before pushing.
-    let rigs = build_rig_entries(&config.rigs).await;
 
     // Best-effort layout restoration: None falls back to the default
     // split in `App::init`. We do this synchronously inside the async
