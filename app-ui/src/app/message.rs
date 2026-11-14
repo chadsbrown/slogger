@@ -53,6 +53,8 @@ pub enum Message {
     ActiveRigChanged(usize),
     KeyerSnapshot(KeyerSnapshot),
     So2rSnapshotMsg(So2rSnapshot),
+    /// Operator picked an SO2R headphone mode: `"mono"` or `"stereo"`.
+    So2rRxModeSelected(&'static str),
     PaneClicked(pane_grid::Pane),
     PaneDragged(pane_grid::DragEvent),
     PaneResized(pane_grid::ResizeEvent),

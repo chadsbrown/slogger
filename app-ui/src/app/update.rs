@@ -214,21 +214,44 @@ impl App {
                 // target also moves the OTRSP TX line. Otherwise an
                 // operator who clicked "R2" in the Station pane would
                 // tune Radio 2 but transmit on Radio 1 — silent footgun.
+                // The headphones follow too, so in mono the operator hears
+                // the radio they just switched to.
                 if let Some(handle) = self.so2r_handle.clone() {
                     let radio = (idx as u8) + 1;
+                    let mode = self.so2r_rx_mode();
                     let so2r = Task::perform(
                         async move {
                             handle
                                 .set_tx_radio(radio)
                                 .await
-                                .map(|_| format!("SO2R TX → R{radio}"))
-                                .map_err(|e| format!("SO2R set_tx error: {e}"))
+                                .map_err(|e| format!("SO2R set_tx error: {e}"))?;
+                            handle
+                                .set_rx_audio(radio, mode)
+                                .await
+                                .map_err(|e| format!("SO2R set_rx error: {e}"))?;
+                            Ok(format!("SO2R TX/RX → R{radio}"))
                         },
                         Message::SendToRigFinished,
                     );
                     return Task::batch([follow, so2r]);
                 }
                 follow
+            }
+            Message::So2rRxModeSelected(mode) => {
+                let Some(handle) = self.so2r_handle.clone() else {
+                    return Task::none();
+                };
+                let radio = (self.active_rig as u8) + 1;
+                Task::perform(
+                    async move {
+                        handle
+                            .set_rx_audio(radio, mode)
+                            .await
+                            .map(|()| format!("SO2R RX {mode}"))
+                            .map_err(|e| format!("SO2R set_rx error: {e}"))
+                    },
+                    Message::SendToRigFinished,
+                )
             }
             Message::UseRigPressed => self.use_rig_now(),
             Message::SendToRigPressed => self.send_to_rig(),
@@ -760,6 +783,16 @@ impl App {
     }
 
     /// Queue CW on the keyer.
+    /// The SO2R headphone mode as last reported by the switch: `"stereo"`
+    /// (one radio per ear) or `"mono"` (the active radio in both ears).
+    /// Reverse stereo counts as stereo; unknown counts as mono.
+    pub(super) fn so2r_rx_mode(&self) -> &'static str {
+        match self.so2r_snapshot.as_ref().map(|s| s.rx_mode.as_str()) {
+            Some("stereo" | "reverse_stereo") => "stereo",
+            _ => "mono",
+        }
+    }
+
     fn send_cw(&mut self, text: String) -> Task<Message> {
         if text.is_empty() {
             return Task::none();

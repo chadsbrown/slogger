@@ -594,6 +594,27 @@ impl App {
             (off, self.so2r_status.clone().unwrap_or_else(|| "off".into()))
         };
         col = col.push(status_line(so2r_color, "SO2R", so2r_text));
+        if self.so2r_active {
+            // Headphone routing: one radio per ear, or the active radio
+            // in both.
+            let current = self.so2r_rx_mode();
+            let choice = |name: &'static str, mode: &'static str| {
+                button(text(name).size(ROW_TEXT))
+                    .padding([2, 10])
+                    .on_press(Message::So2rRxModeSelected(mode))
+                    .style(theme::tab_style(current == mode))
+            };
+            col = col.push(
+                row![
+                    Space::new().width(Length::Fixed(69.0)),
+                    label("AUDIO"),
+                    choice("Stereo", "stereo"),
+                    choice("Mono", "mono"),
+                ]
+                .spacing(6)
+                .align_y(iced::Alignment::Center),
+            );
+        }
 
         let (wsjtx_color, wsjtx_text) = match (self.wsjtx_active, self.wsjtx_bind_addr.as_deref()) {
             (true, Some(addr)) => (
