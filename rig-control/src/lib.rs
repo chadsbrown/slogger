@@ -282,6 +282,12 @@ async fn seed_initial_state(
     s.at = Utc::now();
 }
 
+/// Yaesu, Kenwood and Elecraft rigs only report dial changes while
+/// auto-information is on, and riglib leaves it off unless asked, so each
+/// of those builders enables it. Without it the only events are echoes of
+/// our own set commands: clicking a spot updates the display but turning
+/// the VFO knob does not. Icom has no equivalent command — the operator
+/// must enable CI-V Transceive in the rig's menu.
 async fn build_rig(cfg: &RigConfig) -> Result<Box<dyn Rig + Send + Sync>, ConnectError> {
     match cfg.vendor.to_ascii_lowercase().as_str() {
         "icom" => {
@@ -295,7 +301,7 @@ async fn build_rig(cfg: &RigConfig) -> Result<Box<dyn Rig + Send + Sync>, Connec
         }
         "yaesu" => {
             let model = lookup_yaesu_model(&cfg.model)?;
-            let mut b = YaesuBuilder::new(model).serial_port(&cfg.serial_port);
+            let mut b = YaesuBuilder::new(model).serial_port(&cfg.serial_port).ai(true);
             if let Some(baud) = cfg.baud_rate {
                 b = b.baud_rate(baud);
             }
@@ -304,7 +310,7 @@ async fn build_rig(cfg: &RigConfig) -> Result<Box<dyn Rig + Send + Sync>, Connec
         }
         "kenwood" => {
             let model = lookup_kenwood_model(&cfg.model)?;
-            let mut b = KenwoodBuilder::new(model).serial_port(&cfg.serial_port);
+            let mut b = KenwoodBuilder::new(model).serial_port(&cfg.serial_port).ai(true);
             if let Some(baud) = cfg.baud_rate {
                 b = b.baud_rate(baud);
             }
@@ -313,7 +319,7 @@ async fn build_rig(cfg: &RigConfig) -> Result<Box<dyn Rig + Send + Sync>, Connec
         }
         "elecraft" => {
             let model = lookup_elecraft_model(&cfg.model)?;
-            let mut b = ElecraftBuilder::new(model).serial_port(&cfg.serial_port);
+            let mut b = ElecraftBuilder::new(model).serial_port(&cfg.serial_port).ai(true);
             if let Some(baud) = cfg.baud_rate {
                 b = b.baud_rate(baud);
             }
