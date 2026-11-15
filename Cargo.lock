@@ -157,6 +157,7 @@ dependencies = [
  "spot-feed",
  "station-resolver",
  "tokio",
+ "toml",
  "tracing",
  "tracing-subscriber",
  "wsjtx-bridge",

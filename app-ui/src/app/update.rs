@@ -70,7 +70,11 @@ impl App {
                     if let Some(scale) = saved.font_scale {
                         self.font_scale = scale.clamp(theme::FONT_SCALE_MIN, theme::FONT_SCALE_MAX);
                     }
-                    if let Some(t) = saved.theme.as_deref().and_then(theme::theme_by_name) {
+                    if let Some(t) = saved
+                        .theme
+                        .as_deref()
+                        .and_then(|name| theme::theme_by_name(&self.themes, name))
+                    {
                         self.theme = t;
                     }
                 }
@@ -649,6 +653,15 @@ impl App {
                 self.save_panel_layout()
             }
             Message::OpenModal(modal) => {
+                if matches!(modal, super::modals::Modal::ThemePicker) {
+                    // Pick up theme files added or edited since the last
+                    // look, including edits to the theme in use.
+                    self.themes = theme::all_themes();
+                    let current = self.theme.to_string();
+                    if let Some(t) = theme::theme_by_name(&self.themes, &current) {
+                        self.theme = t;
+                    }
+                }
                 self.modal = Some(modal);
                 Task::none()
             }

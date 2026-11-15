@@ -72,6 +72,9 @@ pub struct App {
     pub(super) qso_detail: Option<logbook_domain::QsoDetail>,
     /// The active colour theme, chosen in the bottom bar.
     pub(super) theme: iced::Theme,
+    /// Every theme the picker offers, re-read from the theme directories
+    /// each time the picker opens.
+    pub(super) themes: Vec<super::theme::ThemeEntry>,
     /// Whole-UI scale factor (the A− / A+ buttons). 1.0 is normal size.
     pub(super) font_scale: f32,
     /// The modal dialog currently open over the UI, if any.
@@ -196,6 +199,7 @@ impl App {
             editing_qso: None,
             qso_detail: None,
             theme: super::theme::app_theme(),
+            themes: super::theme::all_themes(),
             font_scale: 1.0,
             modal: None,
             entry_draft: None,

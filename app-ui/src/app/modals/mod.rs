@@ -66,7 +66,7 @@ pub(super) fn overlay<'a>(
 
 fn view<'a>(app: &'a App, modal: &'a Modal) -> Element<'a, Message> {
     match modal {
-        Modal::ThemePicker => theme::view(&app.theme),
+        Modal::ThemePicker => theme::view(&app.theme, &app.themes),
         Modal::StationEditor(editor) => station::view(editor),
     }
 }

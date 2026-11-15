@@ -1,32 +1,42 @@
 //! Theme picker: a grid of tiles, each drawn in its own theme's colours
 //! so it previews what choosing it would look like. Picking a tile
 //! applies the theme immediately and leaves the modal open, so several
-//! can be tried in a row.
+//! can be tried in a row. Tiles are grouped by where the theme comes from.
 
 use iced::widget::{Space, button, column, container, row, scrollable, text};
 use iced::{Border, Color, Element, Length, Theme};
 
 use super::super::message::Message;
-use super::super::theme as style;
+use super::super::theme::{self as style, ThemeEntry, ThemeSource};
 
 const PER_ROW: usize = 3;
 const GAP: f32 = 10.0;
 
-pub(super) fn view(current: &Theme) -> Element<'_, Message> {
+pub(super) fn view<'a>(current: &'a Theme, themes: &'a [ThemeEntry]) -> Element<'a, Message> {
     let current_name = current.to_string();
 
     let mut rows = column![].spacing(GAP).width(Length::Fill);
-    let themes = style::all_themes();
-    for chunk in themes.chunks(PER_ROW) {
-        let mut tiles = row![].spacing(GAP);
-        for theme in chunk {
-            tiles = tiles.push(tile(theme, theme.to_string() == current_name));
+    for source in ThemeSource::ALL {
+        let group: Vec<&Theme> = themes
+            .iter()
+            .filter(|entry| entry.source == source)
+            .map(|entry| &entry.theme)
+            .collect();
+        if group.is_empty() {
+            continue;
         }
-        // Pad a short final row so its tiles keep the same width.
-        for _ in chunk.len()..PER_ROW {
-            tiles = tiles.push(Space::new().width(Length::Fill));
+        rows = rows.push(style::label(source.title()));
+        for chunk in group.chunks(PER_ROW) {
+            let mut tiles = row![].spacing(GAP);
+            for theme in chunk {
+                tiles = tiles.push(tile(theme, theme.to_string() == current_name));
+            }
+            // Pad a short final row so its tiles keep the same width.
+            for _ in chunk.len()..PER_ROW {
+                tiles = tiles.push(Space::new().width(Length::Fill));
+            }
+            rows = rows.push(tiles);
         }
-        rows = rows.push(tiles);
     }
 
     let body = scrollable(container(rows).padding(iced::Padding {
