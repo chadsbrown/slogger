@@ -179,6 +179,11 @@ async fn sync_lotw_report(
     let since = stored.as_deref().unwrap_or(SINCE_BEGINNING);
     let report = client.fetch(kind, since).await.map_err(|e| e.to_string())?;
     let records: Vec<ServiceQso> = report.records.into_iter().map(service_qso).collect();
+    tracing::info!(
+        report = kind.label(),
+        records = records.len(),
+        "LoTW: report read; matching against the log"
+    );
     let outcome = apply_report(
         repo,
         LOTW_SERVICE,
@@ -189,6 +194,7 @@ async fn sync_lotw_report(
     )
     .await
     .map_err(|e| format!("storing results: {e}"))?;
+    tracing::info!(report = kind.label(), "LoTW: results stored");
     Ok((records, outcome, report.unreadable))
 }
 

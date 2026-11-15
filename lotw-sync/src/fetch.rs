@@ -181,6 +181,12 @@ pub struct LotwReport {
     pub watermark: Option<String>,
 }
 
+const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+/// Limit for one whole report, from request to last byte.
+const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+/// How often a download in progress is noted in the log.
+const PROGRESS_EVERY_BYTES: usize = 2 * 1024 * 1024;
+
 pub struct LotwFetchClient {
     config: LotwFetchConfig,
     http: reqwest::Client,
@@ -188,10 +194,19 @@ pub struct LotwFetchClient {
 
 impl LotwFetchClient {
     pub fn new(config: LotwFetchConfig) -> Self {
-        Self {
-            config,
-            http: reqwest::Client::new(),
-        }
+        // LoTW builds a large report before it sends the first byte, and
+        // a whole-account report can take many minutes, so the overall
+        // limit is generous. Without any limit a stalled connection left
+        // the sync (and its buttons) waiting forever.
+        let http = reqwest::Client::builder()
+            .connect_timeout(CONNECT_TIMEOUT)
+            .timeout(REQUEST_TIMEOUT)
+            .build()
+            .unwrap_or_else(|e| {
+                tracing::warn!(error = %e, "LoTW http client: falling back to defaults");
+                reqwest::Client::new()
+            });
+        Self { config, http }
     }
 
     pub fn with_http(config: LotwFetchConfig, http: reqwest::Client) -> Self {
@@ -204,7 +219,12 @@ impl LotwFetchClient {
     /// The password travels in the query string (LoTW's design), so no
     /// error from here carries the URL.
     pub async fn fetch(&self, kind: LotwReportKind, since: &str) -> Result<LotwReport, FetchError> {
-        let resp = self
+        // Progress goes to the log at info level: a whole-account report
+        // is slow and otherwise silent, and the operator needs to tell
+        // "LoTW is still preparing it" from "nothing is happening".
+        let started = std::time::Instant::now();
+        tracing::info!(report = kind.label(), since, "LoTW: requesting report");
+        let mut resp = self
             .http
             .get(&self.config.report_url)
             .query(&[
@@ -216,7 +236,33 @@ impl LotwFetchClient {
             .await
             .map_err(|e| self.http_error(e))?;
         let status = resp.status();
-        let body = resp.text().await.map_err(|e| self.http_error(e))?;
+        tracing::info!(
+            report = kind.label(),
+            %status,
+            waited_secs = started.elapsed().as_secs(),
+            "LoTW: response started; downloading"
+        );
+        let mut bytes: Vec<u8> = Vec::new();
+        let mut next_note = PROGRESS_EVERY_BYTES;
+        while let Some(chunk) = resp.chunk().await.map_err(|e| self.http_error(e))? {
+            bytes.extend_from_slice(&chunk);
+            if bytes.len() >= next_note {
+                tracing::info!(
+                    report = kind.label(),
+                    megabytes = bytes.len() / (1024 * 1024),
+                    elapsed_secs = started.elapsed().as_secs(),
+                    "LoTW: downloading"
+                );
+                next_note += PROGRESS_EVERY_BYTES;
+            }
+        }
+        tracing::info!(
+            report = kind.label(),
+            kilobytes = bytes.len() / 1024,
+            elapsed_secs = started.elapsed().as_secs(),
+            "LoTW: download complete"
+        );
+        let body = String::from_utf8_lossy(&bytes);
         if !status.is_success() {
             let text = self.redact(page_text(&body));
             return Err(FetchError::Http(if text.is_empty() {
