@@ -9,6 +9,7 @@ use super::drawers::logbook::{BandFilter, LocationFilterOpt, LotwFilter, ModeFil
 use super::panels::{DragMode, PanelKind};
 use super::types::{BootBundle, StationOption, TaggedRigSnapshot};
 use super::views::ViewKind;
+use condx_feed::CondXSnapshot;
 use keyer_control::KeyerSnapshot;
 use so2r_control::So2rSnapshot;
 
@@ -60,6 +61,8 @@ pub enum Message {
     ActiveRigChanged(usize),
     KeyerSnapshot(KeyerSnapshot),
     So2rSnapshotMsg(So2rSnapshot),
+    /// A fresh solar/propagation reading from hamqsl.com.
+    CondXSnapshot(CondXSnapshot),
     /// Operator picked an SO2R headphone mode: `"mono"` or `"stereo"`.
     So2rRxModeSelected(&'static str),
     /// A Spots table column header was clicked.

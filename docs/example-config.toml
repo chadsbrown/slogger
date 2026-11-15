@@ -148,6 +148,21 @@
 
 
 # ============================================================
+# [condx] — solar / propagation conditions (CondX panel)
+# ============================================================
+#
+# Polls N0NBH's feed at hamqsl.com for SFI, sunspots, A/K indices, X-ray,
+# geomagnetic field, signal noise and per-band day/night ratings, shown in
+# the Operating view's CondX panel (open it from the PANELS bar). Off by
+# default: with enabled = false slogger never contacts hamqsl.com. A failed
+# fetch is logged and retried at the next interval.
+
+[condx]
+# enabled = true
+# refresh_interval_secs = 3600     # default 3600 (hourly); minimum 60
+
+
+# ============================================================
 # Sync services
 # ============================================================
 #

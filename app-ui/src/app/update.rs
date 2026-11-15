@@ -63,6 +63,7 @@ impl App {
                 self.so2r_active = bundle.so2r_active;
                 self.so2r_status = bundle.so2r_status;
                 self.so2r_handle = bundle.so2r_handle;
+                self.condx_active = bundle.condx_active;
                 self.config = Some(bundle.config);
                 if let Some(saved) = bundle.panel_layout {
                     self.panels = Panels::from_saved(saved.panels);
@@ -316,6 +317,10 @@ impl App {
             }
             Message::So2rSnapshotMsg(snap) => {
                 self.so2r_snapshot = Some(snap);
+                Task::none()
+            }
+            Message::CondXSnapshot(snap) => {
+                self.condx = Some(snap);
                 Task::none()
             }
             Message::QsoCreated(Ok(_id)) => {

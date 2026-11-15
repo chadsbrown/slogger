@@ -2,11 +2,12 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use app_config::{
-    Config, DxClusterConfig, KeyerConfig as KeyerConfigToml, RigConfig as RigConfigToml,
-    So2rConfig as So2rConfigToml,
+    CondXConfig as CondXConfigToml, Config, DxClusterConfig, KeyerConfig as KeyerConfigToml,
+    RigConfig as RigConfigToml, So2rConfig as So2rConfigToml,
 };
 use app_persistence::{Database, SqliteQsoRepository, SqliteStationRepository};
 use chrono::{Datelike, Utc};
+use condx_feed::{CondXConfig as CondXFeedConfig, spawn_condx_feed};
 use keyer_control::{
     KeyerConfig as KeyerClientConfig, connect as connect_keyer,
 };
@@ -27,7 +28,7 @@ use super::constants::{
 };
 use super::layout::load_layout;
 use super::message::{ImportSummary, RefreshSnapshot};
-use super::subscriptions::{KEYER_RX, RIG_RX, SO2R_RX, SPOT_RX, WSJTX_RX};
+use super::subscriptions::{CONDX_RX, KEYER_RX, RIG_RX, SO2R_RX, SPOT_RX, WSJTX_RX};
 use super::types::{BootBundle, RigEntry, TaggedRigSnapshot};
 
 pub(super) async fn boot_app() -> Result<BootBundle, String> {
@@ -104,6 +105,19 @@ pub(super) async fn boot_app() -> Result<BootBundle, String> {
     } else {
         tracing::info!("wsjtx bridge disabled in config");
         (false, None)
+    };
+
+    // Off unless asked for: no request reaches hamqsl.com otherwise.
+    let condx_active = match spawn_condx_feed(&build_condx_feed_config(&config.condx)) {
+        Some(rx) => {
+            let _ = CONDX_RX.set(Mutex::new(Some(rx)));
+            tracing::info!("condx feed started");
+            true
+        }
+        None => {
+            tracing::info!("condx feed disabled in config");
+            false
+        }
     };
 
     // Hardware connects in the order rigs, keyer, SO2R switch — the order
@@ -184,8 +198,16 @@ pub(super) async fn boot_app() -> Result<BootBundle, String> {
         so2r_active,
         so2r_status,
         so2r_handle,
+        condx_active,
         panel_layout,
     })
+}
+
+fn build_condx_feed_config(cfg: &CondXConfigToml) -> CondXFeedConfig {
+    CondXFeedConfig {
+        enabled: cfg.enabled,
+        refresh_interval_secs: cfg.refresh_interval_secs,
+    }
 }
 
 fn build_so2r_client_config(cfg: &So2rConfigToml) -> Option<So2rClientConfig> {

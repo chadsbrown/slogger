@@ -17,6 +17,7 @@ app-config.workspace = true
 lotw-sync.workspace = true
 eqsl-sync.workspace = true
 clublog-sync.workspace = true
+condx-feed.workspace = true
 hrdlog-sync.workspace = true
 qrz-sync.workspace = true
 rig-control.workspace = true

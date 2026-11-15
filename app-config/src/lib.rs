@@ -33,6 +33,7 @@ pub struct Config {
     pub rigs: Vec<RigConfig>,
     pub keyer: KeyerConfig,
     pub so2r: So2rConfig,
+    pub condx: CondXConfig,
 }
 
 impl Config {
@@ -168,6 +169,18 @@ impl So2rConfig {
     pub fn is_configured(&self) -> bool {
         self.enabled && self.serial_port.is_some()
     }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CondXConfig {
+    /// Whether to poll N0NBH's solar/propagation feed at hamqsl.com for
+    /// the CondX panel. Off by default so an offline station never makes
+    /// a network request it didn't ask for.
+    pub enabled: bool,
+    /// Seconds between polls. Default 3600 (hamqsl updates about
+    /// hourly); values below 60 are raised to 60.
+    pub refresh_interval_secs: Option<u64>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -396,7 +409,7 @@ impl Config {
                 error: e.to_string(),
             })?;
         }
-        let text = "# slogger config\n\n[station]\n# default_callsign = \"W1ABC\"\n\n[lotw]\n# username = \"W1ABC\"\n# password = \"\"\n# tqsl_path = \"/usr/bin/tqsl\"\n# tqsl_station_data = \"/home/you/.tqsl/station_data\"\n\n[eqsl]\n# username = \"W1ABC\"\n# password = \"\"\n\n[clublog]\n# email = \"you@example.com\"\n# password = \"\"\n# callsign = \"W1ABC\"\n\n[qrz]\n# api_key = \"YOUR-KEY-FROM-QRZ-LOGBOOK\"\n\n[hrdlog]\n# callsign = \"W1ABC\"\n# code = \"YOUR-HRDLOG-UPLOAD-CODE\"\n\n[dxcluster]\n# my_callsign = \"W1ABC\"\n# sources = [\n#     { host = \"dxc.kbx.org\", port = 7300 },\n# ]\n\n[wsjtx]\n# enabled = true\n# bind_addr = \"127.0.0.1:2237\"\n\n[[rig]]\n# enabled = true\n# vendor = \"icom\"  # icom / yaesu / kenwood / elecraft / flex\n# model = \"IC-7300\"\n# serial_port = \"/dev/ttyUSB0\"  # for serial vendors\n# baud_rate = 115200\n# host = \"192.168.1.50\"  # for flex (instead of serial_port)\n# label = \"Main\"           # optional friendly name for multi-rig setups\n\n# Add another [[rig]] block for a second radio (SO2R / parallel ops).\n\n[keyer]\n# enabled = true\n# serial_port = \"/dev/ttyUSB1\"\n# initial_wpm = 25\n\n[so2r]\n# enabled = true\n# serial_port = \"/dev/ttyUSB2\"\n# initial_tx = 1                    # 1 or 2\n# initial_rx_mode = \"stereo\"        # mono / stereo / reverse_stereo\n";
+        let text = "# slogger config\n\n[station]\n# default_callsign = \"W1ABC\"\n\n[lotw]\n# username = \"W1ABC\"\n# password = \"\"\n# tqsl_path = \"/usr/bin/tqsl\"\n# tqsl_station_data = \"/home/you/.tqsl/station_data\"\n\n[eqsl]\n# username = \"W1ABC\"\n# password = \"\"\n\n[clublog]\n# email = \"you@example.com\"\n# password = \"\"\n# callsign = \"W1ABC\"\n\n[qrz]\n# api_key = \"YOUR-KEY-FROM-QRZ-LOGBOOK\"\n\n[hrdlog]\n# callsign = \"W1ABC\"\n# code = \"YOUR-HRDLOG-UPLOAD-CODE\"\n\n[dxcluster]\n# my_callsign = \"W1ABC\"\n# sources = [\n#     { host = \"dxc.kbx.org\", port = 7300 },\n# ]\n\n[wsjtx]\n# enabled = true\n# bind_addr = \"127.0.0.1:2237\"\n\n[[rig]]\n# enabled = true\n# vendor = \"icom\"  # icom / yaesu / kenwood / elecraft / flex\n# model = \"IC-7300\"\n# serial_port = \"/dev/ttyUSB0\"  # for serial vendors\n# baud_rate = 115200\n# host = \"192.168.1.50\"  # for flex (instead of serial_port)\n# label = \"Main\"           # optional friendly name for multi-rig setups\n\n# Add another [[rig]] block for a second radio (SO2R / parallel ops).\n\n[keyer]\n# enabled = true\n# serial_port = \"/dev/ttyUSB1\"\n# initial_wpm = 25\n\n[so2r]\n# enabled = true\n# serial_port = \"/dev/ttyUSB2\"\n# initial_tx = 1                    # 1 or 2\n# initial_rx_mode = \"stereo\"        # mono / stereo / reverse_stereo\n\n[condx]\n# enabled = true\n# refresh_interval_secs = 3600     # minimum 60\n";
         std::fs::write(path, text).map_err(|e| ConfigError::Io {
             path: path.to_path_buf(),
             error: e.to_string(),
@@ -490,6 +503,23 @@ mod tests {
     #[test]
     fn so2r_disabled_by_default() {
         assert!(!Config::default().so2r.is_configured());
+    }
+
+    #[test]
+    fn parses_condx_section() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[condx]\nenabled = true\nrefresh_interval_secs = 900\n").unwrap();
+        let cfg = Config::load_from(&path).unwrap();
+        assert!(cfg.condx.enabled);
+        assert_eq!(cfg.condx.refresh_interval_secs, Some(900));
+    }
+
+    #[test]
+    fn condx_disabled_by_default() {
+        let cfg = Config::default();
+        assert!(!cfg.condx.enabled);
+        assert_eq!(cfg.condx.refresh_interval_secs, None);
     }
 
     #[test]

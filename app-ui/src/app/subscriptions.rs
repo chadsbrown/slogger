@@ -1,6 +1,7 @@
 use std::sync::{Mutex, OnceLock};
 
 use iced::Subscription;
+use condx_feed::CondXSnapshot;
 use iced::futures::SinkExt;
 use keyer_control::KeyerSnapshot;
 use so2r_control::So2rSnapshot;
@@ -37,9 +38,13 @@ pub(super) static KEYER_RX: OnceLock<Mutex<Option<mpsc::Receiver<KeyerSnapshot>>
 pub(super) static SO2R_RX: OnceLock<Mutex<Option<mpsc::Receiver<So2rSnapshot>>>> =
     OnceLock::new();
 
+/// And for the CondX solar/propagation snapshots.
+pub(super) static CONDX_RX: OnceLock<Mutex<Option<mpsc::Receiver<CondXSnapshot>>>> =
+    OnceLock::new();
+
 impl App {
     pub fn subscription(&self) -> Subscription<Message> {
-        let mut subs = Vec::with_capacity(7);
+        let mut subs = Vec::with_capacity(8);
         subs.push(iced::event::listen_with(key_event));
         subs.push(iced::time::every(std::time::Duration::from_secs(1)).map(|_| Message::Tick));
         // Pointer tracking is only subscribed while a panel is being
@@ -61,6 +66,9 @@ impl App {
         }
         if self.so2r_active {
             subs.push(Subscription::run(so2r_events_stream).map(Message::So2rSnapshotMsg));
+        }
+        if self.condx_active {
+            subs.push(Subscription::run(condx_events_stream).map(Message::CondXSnapshot));
         }
         Subscription::batch(subs)
     }
@@ -179,6 +187,24 @@ fn wsjtx_events_stream() -> impl iced::futures::Stream<Item = WsjtxMessage> {
 fn so2r_events_stream() -> impl iced::futures::Stream<Item = So2rSnapshot> {
     iced::stream::channel(16, async |mut output| {
         let Some(slot) = SO2R_RX.get() else {
+            std::future::pending::<()>().await;
+            return;
+        };
+        let Some(mut rx) = slot.lock().ok().and_then(|mut g| g.take()) else {
+            std::future::pending::<()>().await;
+            return;
+        };
+        while let Some(s) = rx.recv().await {
+            if output.send(s).await.is_err() {
+                break;
+            }
+        }
+    })
+}
+
+fn condx_events_stream() -> impl iced::futures::Stream<Item = CondXSnapshot> {
+    iced::stream::channel(4, async |mut output| {
+        let Some(slot) = CONDX_RX.get() else {
             std::future::pending::<()>().await;
             return;
         };

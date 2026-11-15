@@ -1,0 +1,13 @@
+[package]
+name = "condx-feed"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+quick-xml.workspace = true
+reqwest.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["sync", "rt-multi-thread", "time"] }
+tracing.workspace = true

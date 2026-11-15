@@ -75,6 +75,8 @@ pub struct BootBundle {
     pub so2r_active: bool,
     pub so2r_status: Option<String>,
     pub so2r_handle: Option<So2rHandle>,
+    /// Whether the CondX poller was started (`[condx] enabled = true`).
+    pub condx_active: bool,
     /// Saved panel layout, theme and text size from `ui-layout.json`, if
     /// present. `None` means nothing has been saved yet (or the file was
     /// unreadable) — the caller keeps the defaults.

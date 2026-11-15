@@ -31,6 +31,7 @@ pub enum PanelKind {
     Keyer,
     Station,
     Recent,
+    CondX,
 }
 
 impl PanelKind {
@@ -41,6 +42,7 @@ impl PanelKind {
         PanelKind::Recent,
         PanelKind::Keyer,
         PanelKind::Station,
+        PanelKind::CondX,
     ];
 
     pub(super) fn title(self) -> &'static str {
@@ -50,11 +52,12 @@ impl PanelKind {
             PanelKind::Keyer => "CW Keyer",
             PanelKind::Station => "Station",
             PanelKind::Recent => "Recent QSOs",
+            PanelKind::CondX => "CondX",
         }
     }
 
     /// Where the panel sits the first time it is shown (and after
-    /// "Reset layout"). The defaults happen not to overlap:
+    /// "Reset layout"). The panels open by default happen not to overlap:
     ///
     /// ```text
     /// ┌─────────────────────────┬─────────────────┐
@@ -67,6 +70,9 @@ impl PanelKind {
     /// │              Recent QSOs                  │
     /// └───────────────────────────────────────────┘
     /// ```
+    ///
+    /// CondX starts closed; when opened it sits over the right-hand end
+    /// of Spots (the comment column), clear of the Entry form.
     pub(super) fn default_rect(self) -> Rect {
         let (x, y, w, h) = match self {
             PanelKind::Spots => (0.00, 0.00, 0.60, 0.68),
@@ -74,6 +80,7 @@ impl PanelKind {
             PanelKind::Keyer => (0.60, 0.30, 0.40, 0.20),
             PanelKind::Station => (0.60, 0.50, 0.40, 0.18),
             PanelKind::Recent => (0.00, 0.68, 1.00, 0.32),
+            PanelKind::CondX => (0.36, 0.00, 0.24, 0.42),
         };
         Rect { x, y, w, h }
     }
@@ -87,6 +94,9 @@ impl PanelKind {
             | PanelKind::Keyer
             | PanelKind::Station
             | PanelKind::Recent => true,
+            // An optional network feed: off until the operator asks, so
+            // existing layouts look the same as before it existed.
+            PanelKind::CondX => false,
         }
     }
 }
@@ -338,11 +348,13 @@ mod tests {
     #[test]
     fn default_panels_fit_on_the_canvas_without_overlapping() {
         let panels = Panels::default();
-        let rects: Vec<Rect> = panels.open().map(|p| p.rect).collect();
-        assert_eq!(rects.len(), PanelKind::ALL.len());
-        for r in &rects {
+        for kind in PanelKind::ALL {
+            let r = kind.default_rect();
             assert!(r.x >= 0.0 && r.y >= 0.0 && r.x + r.w <= 1.0001 && r.y + r.h <= 1.0001);
         }
+        let rects: Vec<Rect> = panels.open().map(|p| p.rect).collect();
+        let open_by_default = PanelKind::ALL.iter().filter(|k| k.default_open()).count();
+        assert_eq!(rects.len(), open_by_default);
         for (i, a) in rects.iter().enumerate() {
             for b in &rects[i + 1..] {
                 let overlap_x = a.x < b.x + b.w - 1e-4 && b.x < a.x + a.w - 1e-4;
@@ -445,6 +457,31 @@ mod tests {
         assert!(!panels.is_open(PanelKind::Spots));
         assert!(panels.is_open(PanelKind::Keyer));
         assert_eq!(rect_of(&panels, PanelKind::Keyer), PanelKind::Keyer.default_rect());
+    }
+
+    #[test]
+    fn condx_starts_closed() {
+        assert!(!Panels::default().is_open(PanelKind::CondX));
+    }
+
+    /// A layout saved before CondX existed lists only the original five
+    /// panels. It must keep their arrangement, gain CondX closed at its
+    /// default spot, and let the operator open it from the panel bar.
+    #[test]
+    fn layout_saved_before_condx_gains_it_closed_and_openable() {
+        let old: Vec<Panel> = Panels::default()
+            .to_saved()
+            .into_iter()
+            .filter(|p| p.kind != PanelKind::CondX)
+            .collect();
+        let mut panels = Panels::from_saved(old.clone());
+        assert_eq!(panels.to_saved()[..old.len()], old[..]);
+        assert!(!panels.is_open(PanelKind::CondX));
+        assert_eq!(rect_of(&panels, PanelKind::CondX), PanelKind::CondX.default_rect());
+
+        panels.toggle(PanelKind::CondX);
+        assert!(panels.is_open(PanelKind::CondX));
+        assert_eq!(top(&panels), PanelKind::CondX);
     }
 
     #[test]

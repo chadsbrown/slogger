@@ -153,6 +153,15 @@ pub(super) fn table_row<'a>(
         .into()
 }
 
+/// A table row with nothing to click: same geometry as [`table_header`]
+/// and [`table_row`] so the columns line up.
+pub(super) fn table_line<'a>(cells: Row<'a, Message>) -> Element<'a, Message> {
+    container(cells.spacing(CELL_SPACING))
+        .padding(ROW_PADDING)
+        .width(Length::Fill)
+        .into()
+}
+
 // ---- containers ----
 
 /// Pane body: a hairline border so the operator can see where panes end.

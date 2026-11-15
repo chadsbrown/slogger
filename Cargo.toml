@@ -8,6 +8,7 @@ members = [
     "lotw-sync",
     "eqsl-sync",
     "clublog-sync",
+    "condx-feed",
     "hrdlog-sync",
     "keyer-control",
     "qrz-sync",
@@ -33,6 +34,7 @@ app-config = { path = "app-config" }
 lotw-sync = { path = "lotw-sync" }
 eqsl-sync = { path = "eqsl-sync" }
 clublog-sync = { path = "clublog-sync" }
+condx-feed = { path = "condx-feed" }
 hrdlog-sync = { path = "hrdlog-sync" }
 keyer-control = { path = "keyer-control" }
 qrz-sync = { path = "qrz-sync" }
@@ -48,6 +50,7 @@ dxfeed = { git = "https://github.com/chadsbrown/dxfeed", features = ["serde"] }
 riglib = { git = "https://github.com/chadsbrown/riglib", features = ["full"] }
 winkey = { git = "https://github.com/chadsbrown/winkey" }
 otrsp = { git = "https://github.com/chadsbrown/otrsp" }
+quick-xml = "0.37"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "multipart"] }
 toml = "0.8"
 tempfile = "3"

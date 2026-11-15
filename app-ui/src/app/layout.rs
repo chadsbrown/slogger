@@ -127,6 +127,32 @@ mod tests {
         assert_eq!(saved.theme, None);
     }
 
+    /// A file written before the CondX panel existed still loads, and the
+    /// new panel joins it closed rather than the layout being discarded.
+    #[test]
+    fn a_file_from_before_condx_loads_with_condx_closed() {
+        use crate::app::panels::PanelKind;
+        let before_condx = r#"{
+          "version": 2,
+          "panels": [
+            { "kind": "Spots",   "x": 0.0, "y": 0.0,  "w": 0.6, "h": 0.68, "open": true },
+            { "kind": "Entry",   "x": 0.6, "y": 0.0,  "w": 0.4, "h": 0.3,  "open": true },
+            { "kind": "Keyer",   "x": 0.6, "y": 0.3,  "w": 0.4, "h": 0.2,  "open": false },
+            { "kind": "Station", "x": 0.6, "y": 0.5,  "w": 0.4, "h": 0.18, "open": true },
+            { "kind": "Recent",  "x": 0.0, "y": 0.68, "w": 1.0, "h": 0.32, "open": true }
+          ],
+          "font_scale": 1.1,
+          "theme": "Nord"
+        }"#;
+        let saved = parse_layout(before_condx).expect("pre-CondX layout should load");
+        assert_eq!(saved.font_scale, Some(1.1));
+        let mut panels = Panels::from_saved(saved.panels);
+        assert!(!panels.is_open(PanelKind::Keyer), "saved choices are kept");
+        assert!(!panels.is_open(PanelKind::CondX));
+        panels.toggle(PanelKind::CondX);
+        assert!(panels.is_open(PanelKind::CondX));
+    }
+
     #[test]
     fn old_tiled_layout_is_rejected_rather_than_crashing() {
         let v1 = r#"{"kind":"Split","axis":"Horizontal","ratio":0.7,

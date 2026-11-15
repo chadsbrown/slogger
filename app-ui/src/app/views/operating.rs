@@ -16,6 +16,9 @@ use iced::widget::{
 use iced::{Color, Element, Length, Point, Size, Theme, mouse};
 use radio_core::Callsign;
 
+use crate::app::condx::{
+    RatingTone, group_by_band, number_or_dash, rating_tone, text_or_dash, updated_label,
+};
 use crate::app::constants::{BANDS, SPOT_MAX_AGE_SECS, modes};
 use crate::app::drawers::awards::AwardKind;
 use crate::app::focus::{
@@ -27,7 +30,7 @@ use crate::app::spots::{SpotColumn, SpotStatus, describe_spot, sort_spots, statu
 use crate::app::state::App;
 use crate::app::theme::{
     self, LABEL_TEXT, MONO, ROW_TEXT, badge, cell, cell_fill, cell_right, label, muted,
-    table_header, table_row,
+    table_header, table_line, table_row,
 };
 
 pub(in crate::app) fn view(app: &App) -> Element<'_, Message> {
@@ -167,6 +170,7 @@ impl App {
             PanelKind::Station => self.station_pane(),
             PanelKind::Keyer => self.keyer_pane(),
             PanelKind::Recent => self.recent_pane(),
+            PanelKind::CondX => self.condx_pane(),
         }
     }
 }
@@ -183,6 +187,8 @@ const W_DATE: f32 = 84.0;
 const W_TIME: f32 = 44.0;
 const W_PREFIX: f32 = 50.0;
 const W_CONT: f32 = 36.0;
+const W_BAND_GROUP: f32 = 70.0;
+const W_RATING: f32 = 56.0;
 
 /// A captioned form field: small label above the input.
 fn field<'a>(caption: &'static str, input: Element<'a, Message>) -> Element<'a, Message> {
@@ -752,6 +758,95 @@ impl App {
 
         scrollable(column![status, send_box, buttons.wrap()].spacing(8)).into()
     }
+}
+
+impl App {
+    // ---- CondX ----
+
+    /// Solar and propagation conditions from hamqsl.com: six headline
+    /// figures in a 3×2 grid, N0NBH's day / night rating for each band
+    /// group, and when hamqsl last updated them.
+    fn condx_pane(&self) -> Element<'_, Message> {
+        if !self.condx_active {
+            return column![
+                text("CondX not enabled").size(14),
+                label("Set [condx] enabled = true in config.toml to see solar and band conditions here."),
+            ]
+            .spacing(4)
+            .into();
+        }
+        let Some(snap) = &self.condx else {
+            return label("Waiting for the first update…").into();
+        };
+
+        let stats = column![
+            row![
+                condx_stat("SFI", number_or_dash(snap.sfi)),
+                condx_stat("SUNSPOTS", number_or_dash(snap.sunspots)),
+                condx_stat(
+                    "A / K",
+                    format!("{} / {}", number_or_dash(snap.a_index), number_or_dash(snap.k_index)),
+                ),
+            ]
+            .spacing(8),
+            row![
+                condx_stat("X-RAY", text_or_dash(&snap.xray)),
+                condx_stat("GEOMAG", text_or_dash(&snap.geomag_field)),
+                condx_stat("S/N", text_or_dash(&snap.signal_noise)),
+            ]
+            .spacing(8),
+        ]
+        .spacing(8);
+
+        let mut col = column![stats].spacing(10);
+
+        let bands = group_by_band(&snap.conditions);
+        if !bands.is_empty() {
+            let mut table = column![
+                table_header(row![
+                    cell("BAND", W_BAND_GROUP),
+                    cell("DAY", W_RATING),
+                    cell("NIGHT", W_RATING),
+                ]),
+                rule::horizontal(1),
+            ];
+            for b in bands {
+                table = table.push(table_line(row![
+                    cell(b.band, W_BAND_GROUP),
+                    rating_cell(b.day),
+                    rating_cell(b.night),
+                ]));
+            }
+            col = col.push(table);
+        }
+
+        if let Some(updated) = updated_label(&snap.updated) {
+            col = col.push(label(updated));
+        }
+
+        scrollable(col).into()
+    }
+}
+
+/// One of the CondX headline figures: caption above value, sharing its
+/// row equally with its neighbours.
+fn condx_stat<'a>(caption: &'static str, value: String) -> Element<'a, Message> {
+    column![label(caption), text(value).font(MONO).size(15)]
+        .spacing(1)
+        .width(Length::FillPortion(1))
+        .into()
+}
+
+/// A band rating coloured by the theme: good is success, fair is
+/// warning, poor is danger, anything else (or missing) is muted.
+fn rating_cell<'a>(rating: Option<String>) -> text::Text<'a> {
+    let tone = rating.as_deref().and_then(rating_tone);
+    cell(rating.unwrap_or_else(|| "—".into()), W_RATING).style(move |theme: &Theme| match tone {
+        Some(RatingTone::Good) => text::success(theme),
+        Some(RatingTone::Fair) => text::warning(theme),
+        Some(RatingTone::Poor) => text::danger(theme),
+        None => muted(theme),
+    })
 }
 
 /// `● Name  detail` — one subsystem's state in the Station pane.

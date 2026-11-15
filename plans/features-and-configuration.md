@@ -284,6 +284,34 @@ The active filter file lets you restrict by band/mode/continent/spotter/
 RBN-quality without flooding the UI with stuff you don't care about.
 Format is dxfeed's own JSON schema; see `dxfeed::filter::config::FilterConfigSerde`.
 
+### `[condx]` — solar / propagation conditions
+
+```toml
+[condx]
+enabled = true
+refresh_interval_secs = 3600
+```
+
+| Field | Required | Default | Notes |
+|---|---|---|---|
+| `enabled` | yes | `false` | Off by default so an offline station makes no unexpected network request. While off, slogger never contacts hamqsl.com. |
+| `refresh_interval_secs` | no | 3600 | Seconds between polls. Values below 60 are raised to 60. hamqsl updates about hourly. |
+
+**What it does**: polls N0NBH's feed at
+`https://www.hamqsl.com/solarxml.php` (first poll at boot, then every
+interval; 30 s request timeout) and shows the result in the Operating
+view's **CondX** panel: SFI, sunspots, A / K index, X-ray, geomagnetic
+field and signal noise, a Band / Day / Night table of N0NBH's calculated
+band conditions (good/excellent in the theme's success colour, fair in
+warning, poor in danger), and when hamqsl last updated (shown in UTC).
+
+The panel starts closed — open it from the PANELS bar. With `[condx]`
+off it says how to turn it on; with it on, it reads "Waiting for the
+first update…" until the first poll succeeds.
+
+**Failures**: a network or parse error is logged as a warning and retried
+at the next interval; the panel keeps showing the last good reading.
+
 ### Sync services — `[lotw]` `[eqsl]` `[clublog]` `[qrz]` `[hrdlog]`
 
 All five share the same shape: optional config section, `is_configured()`
@@ -528,11 +556,12 @@ In order:
    location.
 5. If `[dxcluster]` configured: spawn dxfeed adapter, stash receiver.
 6. If `[wsjtx].enabled`: bind UDP listener.
-7. For each `[[rig]]`: connect (initial sync), spawn forwarder, store
+7. If `[condx].enabled`: spawn the hamqsl poller, stash receiver.
+8. For each `[[rig]]`: connect (initial sync), spawn forwarder, store
    `RigEntry`.
-8. If `[keyer].enabled`: connect, store handle.
-9. If `[so2r].enabled`: connect, store handle.
-10. Render iced window with current state.
+9. If `[keyer].enabled`: connect, store handle.
+10. If `[so2r].enabled`: connect, store handle.
+11. Render iced window with current state.
 
 Failures at any step that targets external hardware/network are logged
 as warnings and the feature stays off. The app launches regardless.
