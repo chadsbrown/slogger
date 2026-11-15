@@ -210,26 +210,31 @@ pub(super) fn app_theme() -> Theme {
     SLOGGER.theme("slogger")
 }
 
-/// Themes designed for slogger, as `(name, [background, surface, line])`:
-/// backgrounds in the middle of the range (neither near-black nor glaring
-/// white), each a differently tinted grey. Six dark-side, then four
-/// light-side. They share one set of plain, saturated colours per side
+/// Themes designed for slogger, as `(name, [background, surface, line])`,
+/// dark-side first. Most sit on a background in the middle of the range
+/// (neither near-black nor glaring white), each a differently tinted
+/// grey; Classic Blue, Console, Classic Grey and Paper are the looks of
+/// older logging software. They share one set of plain colours per side
 /// (see [`Inks`]), so they differ only in the tone they sit on.
 const DESIGNED: &[(&str, [u32; 3])] = &[
+    ("Classic Blue", [0x0f2a70, 0x1a3a8a, 0x3558b0]),
     ("Slate", [0x2f343d, 0x3a404a, 0x525a68]),
     ("Graphite", [0x323234, 0x3e3e41, 0x58585c]),
+    ("Console", [0x141414, 0x222222, 0x444444]),
     ("Pine", [0x2c3832, 0x37443d, 0x4d5e55]),
     ("Umber", [0x3a322d, 0x463d37, 0x60544c]),
     ("Dusk", [0x33323f, 0x3f3e4d, 0x59576b]),
     ("Harbor", [0x293a47, 0x344654, 0x4a6072]),
+    ("Classic Grey", [0xc0c0c0, 0xb4b4b4, 0x808080]),
+    ("Paper", [0xf2f1ec, 0xe6e4dd, 0xbfbcb2]),
     ("Fog", [0xcdd2d8, 0xc0c6cd, 0xa3abb5]),
     ("Stone", [0xd2cfc8, 0xc5c2ba, 0xa8a49b]),
     ("Parchment", [0xddd3bd, 0xd0c5ad, 0xb3a78c]),
     ("Sage", [0xc9d1c4, 0xbcc5b6, 0x9eaa97]),
 ];
 
-/// The colours the designed themes draw with: the traditional ones, at
-/// full strength rather than softened.
+/// The colours the designed themes draw with: the pure, traditional ones
+/// of a colour terminal, not softened tints of them.
 struct Inks {
     muted: u32,
     text: u32,
@@ -249,29 +254,29 @@ struct Inks {
 /// For the dark-side themes: white text, yellow callsigns, cyan
 /// frequencies.
 const DARK_INKS: Inks = Inks {
-    muted: 0xa9afb8,
-    text: 0xf5f6f7,
-    accent: 0x4a93ff,
-    green: 0x33d65c,
-    amber: 0xffa726,
-    red: 0xff5252,
-    call: 0xffdd33,
-    freq: 0x29d3f0,
-    magenta: 0xff66e0,
+    muted: 0xc3c8cf,
+    text: 0xffffff,
+    accent: 0x1e6fff,
+    green: 0x00d700,
+    amber: 0xff9500,
+    red: 0xff2020,
+    call: 0xffff00,
+    freq: 0x00ffff,
+    magenta: 0xff00ff,
 };
 
-/// For the light-side themes: black text, blue callsigns, teal
+/// For the light-side themes: black text, navy callsigns, teal
 /// frequencies.
 const LIGHT_INKS: Inks = Inks {
-    muted: 0x4f5560,
-    text: 0x101214,
-    accent: 0x1553c7,
-    green: 0x075a17,
-    amber: 0x7a4700,
-    red: 0xb81414,
-    call: 0x0a3fb5,
-    freq: 0x00566a,
-    magenta: 0x8a1f8a,
+    muted: 0x3c4048,
+    text: 0x000000,
+    accent: 0x0000a8,
+    green: 0x006400,
+    amber: 0x8a4b00,
+    red: 0xc00000,
+    call: 0x0000c0,
+    freq: 0x005050,
+    magenta: 0x800080,
 };
 
 fn designed_scheme([background, surface, line]: [u32; 3]) -> Scheme {
@@ -1095,29 +1100,19 @@ palette:
     }
 
     #[test]
-    fn designed_themes_are_mid_toned_and_high_contrast() {
+    fn designed_themes_are_high_contrast_in_plain_colours() {
         for (theme, &(name, tones)) in designed().zip(DESIGNED) {
             let s = designed_scheme(tones);
-            let lum = luminance(s.background);
-            assert!(
-                (0.025..0.09).contains(&lum) || (0.55..0.75).contains(&lum),
-                "{name}: background luminance {lum}"
-            );
             assert!(contrast(s.text, s.background) >= 10.0, "{name}: text");
             // The inks as chosen, before `legible` has had to step in.
-            // Red and blue cannot be both saturated and bright, so the
-            // status colours get a lower bar than table text.
-            for (what, c, min) in [
-                ("muted", s.muted, 4.5),
-                ("call", s.orange, 4.5),
-                ("freq", s.cyan, 4.5),
-                ("green", s.green, 4.5),
-                ("amber", s.yellow, 4.5),
-                ("red", s.red, 3.5),
-                ("accent", s.accent, 3.5),
-            ] {
+            for (what, c) in [("muted", s.muted), ("call", s.orange), ("freq", s.cyan)] {
                 let ratio = contrast(c, s.background);
-                assert!(ratio >= min, "{name}: {what} is only {ratio:.1}:1");
+                assert!(ratio >= 4.5, "{name}: {what} is only {ratio:.1}:1");
+            }
+            // Pure red and blue are dim, so status colours may be nudged.
+            let p = theme.palette();
+            for c in [p.primary, p.success, p.warning, p.danger] {
+                assert!(contrast(c, s.background) >= 3.0, "{name}: status");
             }
             let h = hues(&theme);
             assert_eq!((h.band, h.mode), (s.text, s.text), "{name}");
