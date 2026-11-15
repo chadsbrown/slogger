@@ -45,7 +45,7 @@ fn fmt_dt(dt: &DateTime<Utc>) -> String {
     dt.to_rfc3339()
 }
 
-fn row_to_location(row: &sqlx::sqlite::SqliteRow) -> RepoResult<StationLocation> {
+pub(crate) fn row_to_location(row: &sqlx::sqlite::SqliteRow) -> RepoResult<StationLocation> {
     let id: String = row.try_get("id").map_err(map_err)?;
     let name: String = row.try_get("name").map_err(map_err)?;
     let station_callsign: Option<String> = row.try_get("station_callsign").map_err(map_err)?;
@@ -91,51 +91,60 @@ fn row_to_location(row: &sqlx::sqlite::SqliteRow) -> RepoResult<StationLocation>
     })
 }
 
+/// `INSERT INTO station_locations` for `location`, ready to execute.
+/// Shared with the QSO repository's import batch, which creates the
+/// locations an ADIF file names inside its own transaction.
+pub(crate) fn insert_location_sql(
+    location: &StationLocation,
+) -> sqlx::query::Query<'_, sqlx::Sqlite, sqlx::sqlite::SqliteArguments<'_>> {
+    sqlx::query(
+        r#"
+        INSERT INTO station_locations (
+            id, name,
+            station_callsign, owner_callsign,
+            city, county, state, country, grid,
+            latitude, longitude,
+            cq_zone, itu_zone, iota,
+            lotw_station_location, eqsl_account,
+            created_at, updated_at
+        ) VALUES (
+            ?, ?,
+            ?, ?,
+            ?, ?, ?, ?, ?,
+            ?, ?,
+            ?, ?, ?,
+            ?, ?,
+            ?, ?
+        )
+        "#,
+    )
+    .bind(location.id.as_uuid().to_string())
+    .bind(&location.name)
+    .bind(location.station_callsign.as_ref().map(|c| c.as_str().to_string()))
+    .bind(location.owner_callsign.as_ref().map(|c| c.as_str().to_string()))
+    .bind(&location.city)
+    .bind(&location.county)
+    .bind(&location.state)
+    .bind(&location.country)
+    .bind(&location.grid)
+    .bind(location.latitude)
+    .bind(location.longitude)
+    .bind(location.cq_zone.map(|v| v as i64))
+    .bind(location.itu_zone.map(|v| v as i64))
+    .bind(&location.iota)
+    .bind(&location.lotw_station_location)
+    .bind(&location.eqsl_account)
+    .bind(fmt_dt(&location.created_at))
+    .bind(fmt_dt(&location.updated_at))
+}
+
 #[async_trait]
 impl StationRepository for SqliteStationRepository {
     async fn insert_location(&self, location: &StationLocation) -> RepoResult<()> {
-        sqlx::query(
-            r#"
-            INSERT INTO station_locations (
-                id, name,
-                station_callsign, owner_callsign,
-                city, county, state, country, grid,
-                latitude, longitude,
-                cq_zone, itu_zone, iota,
-                lotw_station_location, eqsl_account,
-                created_at, updated_at
-            ) VALUES (
-                ?, ?,
-                ?, ?,
-                ?, ?, ?, ?, ?,
-                ?, ?,
-                ?, ?, ?,
-                ?, ?,
-                ?, ?
-            )
-            "#,
-        )
-        .bind(location.id.as_uuid().to_string())
-        .bind(&location.name)
-        .bind(location.station_callsign.as_ref().map(|c| c.as_str().to_string()))
-        .bind(location.owner_callsign.as_ref().map(|c| c.as_str().to_string()))
-        .bind(&location.city)
-        .bind(&location.county)
-        .bind(&location.state)
-        .bind(&location.country)
-        .bind(&location.grid)
-        .bind(location.latitude)
-        .bind(location.longitude)
-        .bind(location.cq_zone.map(|v| v as i64))
-        .bind(location.itu_zone.map(|v| v as i64))
-        .bind(&location.iota)
-        .bind(&location.lotw_station_location)
-        .bind(&location.eqsl_account)
-        .bind(fmt_dt(&location.created_at))
-        .bind(fmt_dt(&location.updated_at))
-        .execute(&self.pool)
-        .await
-        .map_err(map_err)?;
+        insert_location_sql(location)
+            .execute(&self.pool)
+            .await
+            .map_err(map_err)?;
         Ok(())
     }
 

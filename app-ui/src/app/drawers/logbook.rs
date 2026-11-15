@@ -12,13 +12,14 @@ use iced::widget::{
 };
 use iced::{Element, Length};
 use chrono::{DateTime, Utc};
-use logbook_domain::{QsoDetail, QsoSummary};
+use logbook_domain::{CreditStatus, LocationFilter, QsoDetail, QsoSearch, QsoSummary};
 use radio_core::{Band, Mode, PropagationMode, QsoId, StationLocation};
 
 use crate::app::constants::{BANDS, modes};
 use crate::app::message::Message;
 use crate::app::state::App;
 use crate::app::theme;
+use crate::app::types::StationOption;
 
 /// Tri-state filter for the `lotw_confirmed` field on `QsoSearch`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -81,6 +82,45 @@ impl std::fmt::Display for ModeFilter {
     }
 }
 
+/// Station-location filter choice for the pick_list: Any, None (QSOs
+/// with no location — what an import leaves when the file names none), or
+/// one location.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocationFilterOpt {
+    pub filter: LocationFilter,
+    pub label: String,
+}
+
+impl Default for LocationFilterOpt {
+    fn default() -> Self {
+        Self {
+            filter: LocationFilter::Any,
+            label: "Any".into(),
+        }
+    }
+}
+
+impl std::fmt::Display for LocationFilterOpt {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.label)
+    }
+}
+
+fn location_filter_options(locations: &[StationLocation]) -> Vec<LocationFilterOpt> {
+    let mut opts = vec![
+        LocationFilterOpt::default(),
+        LocationFilterOpt {
+            filter: LocationFilter::Unassigned,
+            label: "None (unassigned)".into(),
+        },
+    ];
+    opts.extend(locations.iter().map(|l| LocationFilterOpt {
+        filter: LocationFilter::Is(l.id),
+        label: StationOption::from(l).label,
+    }));
+    opts
+}
+
 fn band_filter_options() -> Vec<BandFilter> {
     let mut opts = Vec::with_capacity(BANDS.len() + 1);
     opts.push(BandFilter(None));
@@ -103,6 +143,13 @@ pub(crate) struct LogbookSearchState {
     pub band: BandFilter,
     pub mode: ModeFilter,
     pub lotw_filter: LotwFilter,
+    pub location_filter: LocationFilterOpt,
+    /// The search behind `results`, as it was when Search was pressed —
+    /// what "assign to all matches" applies to, even if the form has
+    /// been edited since.
+    pub last_search: Option<QsoSearch>,
+    /// Location chosen in the "assign all matches" control.
+    pub assign_target: Option<StationOption>,
     /// Last search results (lazy: only populated after Search pressed).
     pub results: Vec<QsoSummary>,
     /// Total matching count from `count_matching` — usually equals
@@ -176,6 +223,13 @@ impl App {
                     Message::LogbookLotwFilterChanged,
                 )
                 .width(Length::Fixed(140.0)),
+                text("Location:").width(Length::Fixed(60.0)),
+                pick_list(
+                    location_filter_options(&self.station_locations),
+                    Some(state.location_filter.clone()),
+                    Message::LogbookLocationFilterChanged,
+                )
+                .width(Length::Fixed(200.0)),
             ]
             .spacing(8),
             row![
@@ -233,6 +287,36 @@ impl App {
             .into()
         };
 
+        // Applies to every match of the last search, not just the rows
+        // shown or selected: the way to place QSOs an import left without
+        // a station location (filter Location = None, then assign).
+        let assign_location: Element<'_, Message> = match state.total_count {
+            Some(n) if n > 0 && !self.station_locations.is_empty() => {
+                let options: Vec<StationOption> =
+                    self.station_locations.iter().map(StationOption::from).collect();
+                let assign = button(text(format!("Assign to all {n}")));
+                row![
+                    text("Station location:"),
+                    pick_list(
+                        options,
+                        state.assign_target.clone(),
+                        Message::LogbookAssignTargetChanged,
+                    )
+                    .placeholder("choose…")
+                    .width(Length::Fixed(220.0)),
+                    if state.assign_target.is_some() {
+                        assign.on_press(Message::LogbookBulkAssignLocation)
+                    } else {
+                        assign
+                    },
+                ]
+                .spacing(6)
+                .align_y(iced::Alignment::Center)
+                .into()
+            }
+            _ => column![].into(),
+        };
+
         let action_status: Element<'_, Message> = match &state.last_action {
             Some(s) => text(s.as_str()).size(12).into(),
             None => column![].into(),
@@ -273,7 +357,12 @@ impl App {
             );
         }
 
-        column![bulk_actions, action_status, scrollable(list).height(Length::Fill)]
+        column![
+            bulk_actions,
+            assign_location,
+            action_status,
+            scrollable(list).height(Length::Fill)
+        ]
             .spacing(8)
             .into()
     }
@@ -407,6 +496,27 @@ fn detail_sections(detail: &QsoDetail, locations: &[StationLocation]) -> Vec<Det
     push(&mut dx, "County", q.county.clone());
     push(&mut dx, "Province", q.province.clone());
     push(&mut dx, "IOTA", q.iota.clone());
+    push(&mut dx, "WPX prefix", q.wpx_prefix.clone());
+    push(&mut dx, "Latitude", q.latitude.map(|v| format!("{v:.4}")));
+    push(&mut dx, "Longitude", q.longitude.map(|v| format!("{v:.4}")));
+
+    let mut operator = Vec::new();
+    push(&mut operator, "Name", q.name.clone());
+    push(&mut operator, "QTH", q.qth.clone());
+    // ADIF multi-line values use CR LF; one line break per line here.
+    push(&mut operator, "Address", q.address.as_ref().map(|a| a.replace("\r\n", "\n")));
+    push(&mut operator, "Email", q.email.clone());
+    push(&mut operator, "Age", q.age.map(|a| a.to_string()));
+    push(&mut operator, "QSL via", q.qsl_via.clone());
+    push(&mut operator, "Comment", q.comment.clone());
+
+    let mut contest = Vec::new();
+    push(&mut contest, "Contest", q.contest_id.clone());
+    push(&mut contest, "Serial sent", q.serial_sent.map(|n| n.to_string()));
+    push(&mut contest, "Serial rcvd", q.serial_rcvd.map(|n| n.to_string()));
+    push(&mut contest, "Exch sent", q.exchange_sent.clone());
+    push(&mut contest, "Exch rcvd", q.exchange_rcvd.clone());
+    push(&mut contest, "ARRL section", q.arrl_section.clone());
 
     let mut path = Vec::new();
     push(
@@ -422,12 +532,29 @@ fn detail_sections(detail: &QsoDetail, locations: &[StationLocation]) -> Vec<Det
             PropagationMode::Other(s) => s.clone(),
         }),
     );
+    // The receive side only when it says something the transmit side
+    // (shown in the entry form above) doesn't.
+    push(
+        &mut path,
+        "RX band",
+        q.band_rx.filter(|b| Some(*b) != q.band).map(|b| b.as_adif().to_string()),
+    );
+    push(
+        &mut path,
+        "RX freq",
+        q.freq_rx_hz
+            .filter(|hz| Some(*hz) != q.freq_hz)
+            .map(|hz| format!("{:.3} kHz", hz as f64 / 1000.0)),
+    );
     push(&mut path, "Satellite", q.sat_name.clone());
     push(&mut path, "Sat mode", q.sat_mode.clone());
     push(&mut path, "TX power", q.tx_power_w.map(|w| format!("{w} W")));
     push(&mut path, "RX power", q.rx_power_w.map(|w| format!("{w} W")));
     push(&mut path, "Distance", q.distance_km.map(|d| format!("{d:.0} km")));
     push(&mut path, "Bearing", q.bearing_deg.map(|b| format!("{b:.0}°")));
+    push(&mut path, "SFI", q.sfi.map(|n| n.to_string()));
+    push(&mut path, "A index", q.a_index.map(|n| n.to_string()));
+    push(&mut path, "K index", q.k_index.map(|n| n.to_string()));
 
     let mut station = Vec::new();
     push(
@@ -439,6 +566,11 @@ fn detail_sections(detail: &QsoDetail, locations: &[StationLocation]) -> Vec<Det
         &mut station,
         "Owner call",
         q.owner_callsign.as_ref().map(|c| c.as_str().to_string()),
+    );
+    push(
+        &mut station,
+        "Operator call",
+        q.operator_callsign.as_ref().map(|c| c.as_str().to_string()),
     );
     push(
         &mut station,
@@ -473,6 +605,22 @@ fn detail_sections(detail: &QsoDetail, locations: &[StationLocation]) -> Vec<Det
         })
         .collect();
 
+    let credit = detail
+        .credits
+        .iter()
+        .map(|c| {
+            let status = match c.status {
+                CreditStatus::Granted => "granted",
+                CreditStatus::Submitted => "submitted",
+            };
+            let value = match &c.medium {
+                Some(m) => format!("{status}  ·  {m}"),
+                None => status.to_string(),
+            };
+            (c.award.clone(), value)
+        })
+        .collect();
+
     let other = detail
         .exchange_fields
         .iter()
@@ -493,9 +641,12 @@ fn detail_sections(detail: &QsoDetail, locations: &[StationLocation]) -> Vec<Det
     vec![
         ("TIME", time),
         ("DX STATION", dx),
+        ("OPERATOR", operator),
+        ("CONTEST", contest),
         ("PATH", path),
         ("MY STATION", station),
         ("QSL", qsl),
+        ("AWARD CREDIT", credit),
         ("OTHER FIELDS", other),
         ("RECORD", record),
     ]
@@ -512,10 +663,8 @@ mod tests {
         &sections.iter().find(|(t, _)| *t == title).unwrap().1
     }
 
-    #[test]
-    fn detail_lists_what_is_set_and_omits_what_is_not() {
-        let begin = Utc.with_ymd_and_hms(2026, 5, 8, 18, 30, 0).unwrap();
-        let qso = Qso {
+    fn bare_qso(begin: DateTime<Utc>) -> Qso {
+        Qso {
             id: QsoId::new(),
             call: Callsign::parse("DL1XYZ").unwrap(),
             qso_begin: begin,
@@ -530,16 +679,35 @@ mod tests {
             station_location_id: None,
             station_callsign: None,
             owner_callsign: None,
-            dxcc_id: Some(230),
-            dxcc_prefix: Some("DL".into()),
+            operator_callsign: None,
+            dxcc_id: None,
+            dxcc_prefix: None,
+            wpx_prefix: None,
             continent: None,
-            cq_zone: Some(14),
+            cq_zone: None,
             itu_zone: None,
             grid: None,
             state: None,
             county: None,
             province: None,
             iota: None,
+            latitude: None,
+            longitude: None,
+            name: None,
+            qth: None,
+            address: None,
+            email: None,
+            age: None,
+            qsl_via: None,
+            comment: None,
+            contest_id: None,
+            serial_sent: None,
+            serial_rcvd: None,
+            exchange_sent: None,
+            exchange_rcvd: None,
+            arrl_section: None,
+            band_rx: None,
+            freq_rx_hz: None,
             tx_power_w: None,
             rx_power_w: None,
             propagation_mode: None,
@@ -547,8 +715,31 @@ mod tests {
             sat_mode: None,
             distance_km: None,
             bearing_deg: None,
+            sfi: None,
+            a_index: None,
+            k_index: None,
             created_at: begin,
             updated_at: begin,
+        }
+    }
+
+    fn detail_of(qso: Qso) -> QsoDetail {
+        QsoDetail {
+            qso,
+            exchange_fields: Vec::new(),
+            service_states: Vec::new(),
+            credits: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn detail_lists_what_is_set_and_omits_what_is_not() {
+        let begin = Utc.with_ymd_and_hms(2026, 5, 8, 18, 30, 0).unwrap();
+        let qso = Qso {
+            dxcc_id: Some(230),
+            dxcc_prefix: Some("DL".into()),
+            cq_zone: Some(14),
+            ..bare_qso(begin)
         };
         let detail = QsoDetail {
             qso,
@@ -566,6 +757,7 @@ mod tests {
                 confirmed_at: Some(Utc.with_ymd_and_hms(2026, 5, 9, 0, 0, 0).unwrap()),
                 last_error: None,
             }],
+            credits: Vec::new(),
         };
 
         let sections = detail_sections(&detail, &[]);
@@ -577,6 +769,9 @@ mod tests {
             ]
         );
         assert!(section(&sections, "PATH").is_empty());
+        assert!(section(&sections, "OPERATOR").is_empty());
+        assert!(section(&sections, "CONTEST").is_empty());
+        assert!(section(&sections, "AWARD CREDIT").is_empty());
         assert_eq!(
             section(&sections, "QSL"),
             [("LoTW".to_string(), "verified  ·  confirmed 2026-05-09".to_string())]
@@ -586,5 +781,71 @@ mod tests {
             [("NAME".to_string(), "Hans".to_string())]
         );
         assert_eq!(section(&sections, "TIME")[0].1, "2026-05-08 18:30:00 UTC");
+    }
+
+    #[test]
+    fn detail_shows_imported_dxkeeper_fields() {
+        let begin = Utc.with_ymd_and_hms(2026, 5, 8, 18, 30, 0).unwrap();
+        let mut detail = detail_of(Qso {
+            band: Some(Band::M20),
+            freq_hz: Some(14_025_000),
+            band_rx: Some(Band::M20),
+            freq_rx_hz: Some(14_027_500),
+            wpx_prefix: Some("DL1".into()),
+            latitude: Some(52.5),
+            longitude: Some(-13.25),
+            operator_callsign: Some(Callsign::parse("K1ABC").unwrap()),
+            name: Some("Hans".into()),
+            address: Some("Strasse 1\r\nBerlin".into()),
+            age: Some(42),
+            contest_id: Some("CQ-WW-CW".into()),
+            serial_sent: Some(17),
+            exchange_rcvd: Some("14".into()),
+            sfi: Some(150),
+            k_index: Some(2),
+            ..bare_qso(begin)
+        });
+        detail.credits = vec![
+            logbook_domain::AwardCredit {
+                award: "DXCC".into(),
+                medium: Some("LOTW".into()),
+                status: CreditStatus::Granted,
+            },
+            logbook_domain::AwardCredit {
+                award: "WAS".into(),
+                medium: None,
+                status: CreditStatus::Submitted,
+            },
+        ];
+        let sections = detail_sections(&detail, &[]);
+        let row = |title: &str, name: &str| {
+            section(&sections, title)
+                .iter()
+                .find(|(n, _)| n == name)
+                .map(|(_, v)| v.clone())
+        };
+        assert_eq!(row("DX STATION", "WPX prefix").as_deref(), Some("DL1"));
+        assert_eq!(row("DX STATION", "Latitude").as_deref(), Some("52.5000"));
+        assert_eq!(row("DX STATION", "Longitude").as_deref(), Some("-13.2500"));
+        assert_eq!(row("OPERATOR", "Name").as_deref(), Some("Hans"));
+        assert_eq!(row("OPERATOR", "Address").as_deref(), Some("Strasse 1\nBerlin"));
+        assert_eq!(row("OPERATOR", "Age").as_deref(), Some("42"));
+        assert_eq!(section(&sections, "OPERATOR").len(), 3);
+        assert_eq!(row("CONTEST", "Contest").as_deref(), Some("CQ-WW-CW"));
+        assert_eq!(row("CONTEST", "Serial sent").as_deref(), Some("17"));
+        assert_eq!(row("CONTEST", "Exch rcvd").as_deref(), Some("14"));
+        // Same RX band as TX: not repeated. Different RX freq: shown.
+        assert_eq!(row("PATH", "RX band"), None);
+        assert_eq!(row("PATH", "RX freq").as_deref(), Some("14027.500 kHz"));
+        assert_eq!(row("PATH", "SFI").as_deref(), Some("150"));
+        assert_eq!(row("PATH", "A index"), None);
+        assert_eq!(row("MY STATION", "Operator call").as_deref(), Some("K1ABC"));
+        assert_eq!(
+            section(&sections, "AWARD CREDIT"),
+            [
+                ("DXCC".to_string(), "granted  ·  LOTW".to_string()),
+                ("WAS".to_string(), "submitted".to_string()),
+            ]
+        );
     }
 }

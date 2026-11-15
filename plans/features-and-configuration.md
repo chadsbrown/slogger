@@ -31,7 +31,8 @@ These run regardless of configuration.
 ### SQLite logbook
 
 The `slogger.sqlite` database is auto-created at first launch with
-schema migration `0001_initial.sql` applied. The schema covers QSOs,
+schema migrations (`0001_initial.sql`, `0002_dxkeeper_fields.sql`)
+applied. The schema covers QSOs,
 exchange fields, notes, attachments, provenance, station_locations,
 operators, service accounts + state + sync_jobs,
 award definitions + progress + credit imports + links.
@@ -56,11 +57,31 @@ are logged location-less until the operator creates one.
 
 - `parse_adif(text)` — read an ADIF string (file content, WSJT-X UDP
   payload, etc.) into `Vec<CreateQsoCommand>`. Maps the standard ADIF
-  fields onto first-class QSO columns; unknown ADIF fields land in
-  `qso_exchange_fields` with `FieldSource::ImportedAdif` so they survive
-  round-trip.
-- `export_adif(qsos, opts)` — write a `Vec<Qso>` to ADIF text. Handles
-  band/mode/freq/RST/DXCC/zones/grid/state/county/IOTA/power/propagation.
+  fields onto first-class QSO columns — including the other operator
+  (`NAME`, `QTH`, `ADDRESS`, `EMAIL`, `AGE`, `QSL_VIA`, `COMMENT`), the
+  contest exchange (`CONTEST_ID`, `STX`/`SRX`, `STX_STRING`/`SRX_STRING`,
+  `ARRL_SECT`), the receive side (`BAND_RX`, `FREQ_RX`), `LAT`/`LON`,
+  `DISTANCE`, `ANT_AZ`, `SFI`/`A_INDEX`/`K_INDEX`, `PFX` (the WPX prefix)
+  and `OPERATOR` / `OWNER_CALLSIGN` (separately). DXKeeper's
+  `APP_DXKEEPER_DXCCPREFIX` is the DXCC entity prefix. Unknown ADIF
+  fields, and mapped ones whose value doesn't fit the column (a
+  non-numeric `STX`), land in `qso_exchange_fields` with
+  `FieldSource::ImportedAdif` so they survive round-trip. The QSL-service
+  fields stay there too; `import_qsos` derives `qso_service_state` from
+  them (`APP_DXKEEPER_QRZCOM_LOGID` → the QRZ row's `remote_id`).
+- My station: `import_qsos` links each QSO to the `station_locations` row
+  named by `APP_DXKEEPER_MY_QTHID` (or derived from `MY_*` fields),
+  creating it on first sight. QSOs whose record names no location are
+  left unassigned; the Logbook's Location = None filter plus "Assign to
+  all" fixes them up.
+- Award credit: `CREDIT_GRANTED` / `CREDIT_SUBMITTED` become
+  `award_credit_imports` + `award_credit_links` rows; awards count a unit
+  as credited when a QSO for it has granted credit.
+- `export_adif(qsos, opts)` — write a `Vec<Qso>` to ADIF text: every QSO
+  column (what the service uploads send). `export_adif_records` /
+  `LogbookService::export_adif_by_search` also write the station location
+  (`APP_DXKEEPER_MY_QTHID` + `MY_*`), credit and extra fields, so an
+  export re-imports into an empty log unchanged.
 
 ### Awards (derived)
 
@@ -71,7 +92,9 @@ refresh. Per-band DXCC breakdown also produced.
 ### Search / bulk
 
 `LogbookService::search_qsos`, `search_full_qsos`, `count_matching`, and
-`bulk_*_by_search` are always available. No config needed.
+`bulk_*_by_search` (including `bulk_assign_location_by_search`, which
+applies to every match regardless of the result limit) are always
+available. No config needed.
 
 ---
 

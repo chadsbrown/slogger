@@ -1,15 +1,19 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use chrono::{DateTime, NaiveDate, TimeZone, Utc};
 
-use radio_core::{Qso, QsoExchangeField, QsoId};
+use radio_core::{FieldSource, Qso, QsoExchangeField, QsoId, StationLocation, StationLocationId};
 use station_resolver::{NoOpResolver, Resolver};
 
 use crate::commands::CreateQsoCommand;
+use crate::credit::AwardCredit;
+use crate::export::{ExportOptions, ExportRecord, export_adif_records};
+use crate::my_station::{StationLocationRef, fill_location, location_covers};
 use crate::queries::{QsoSearch, QsoSummary};
 use crate::repository::{
-    DedupKey, ImportedServiceState, QsoDetail, QsoRepository, RepoResult, RepositoryError,
+    DedupKey, ImportBatch, ImportedCredit, ImportedServiceState, QsoDetail, QsoRepository,
+    RepoResult, RepositoryError,
 };
 
 #[derive(Debug)]
@@ -21,12 +25,94 @@ pub struct LogbookService {
 #[derive(Debug, Default)]
 pub struct ImportReport {
     pub created: usize,
-    /// QSOs already in the log (matched on station_callsign + call + date
-    /// + band + mode). Skipped without error. Lets repeated WSJT-X
+    /// QSOs already in the log (matched on station_callsign + call +
+    /// start time + band + mode). Skipped without error. Lets repeated WSJT-X
     /// broadcasts and re-imported ADIFs converge on a stable count.
     pub duplicates: usize,
     pub skipped: usize,
+    /// Station locations the import created for QTH names it hadn't seen.
+    pub locations_created: usize,
     pub errors: Vec<String>,
+}
+
+/// The parts of a `CreateQsoCommand` that aren't columns of the QSO.
+struct CommandExtras {
+    exchange_fields: Vec<QsoExchangeField>,
+    station_location_ref: Option<StationLocationRef>,
+    credits: Vec<AwardCredit>,
+}
+
+/// Split a command into the QSO record (not yet enriched) and the rest.
+fn qso_from_command(
+    id: QsoId,
+    command: CreateQsoCommand,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+) -> (Qso, CommandExtras) {
+    let c = command;
+    let qso = Qso {
+        id,
+        call: c.call,
+        qso_begin: c.qso_begin,
+        qso_end: c.qso_end,
+        band: c.band,
+        freq_hz: c.freq_hz,
+        mode: c.mode,
+        submode: c.submode,
+        rst_sent: c.rst_sent,
+        rst_rcvd: c.rst_rcvd,
+        operator_id: c.operator_id,
+        station_location_id: c.station_location_id,
+        station_callsign: c.station_callsign,
+        owner_callsign: c.owner_callsign,
+        operator_callsign: c.operator_callsign,
+        dxcc_id: c.dxcc_id,
+        dxcc_prefix: c.dxcc_prefix,
+        wpx_prefix: c.wpx_prefix,
+        continent: c.continent,
+        cq_zone: c.cq_zone,
+        itu_zone: c.itu_zone,
+        grid: c.grid,
+        state: c.state,
+        county: c.county,
+        province: c.province,
+        iota: c.iota,
+        latitude: c.latitude,
+        longitude: c.longitude,
+        name: c.name,
+        qth: c.qth,
+        address: c.address,
+        email: c.email,
+        age: c.age,
+        qsl_via: c.qsl_via,
+        comment: c.comment,
+        contest_id: c.contest_id,
+        serial_sent: c.serial_sent,
+        serial_rcvd: c.serial_rcvd,
+        exchange_sent: c.exchange_sent,
+        exchange_rcvd: c.exchange_rcvd,
+        arrl_section: c.arrl_section,
+        band_rx: c.band_rx,
+        freq_rx_hz: c.freq_rx_hz,
+        tx_power_w: c.tx_power_w,
+        rx_power_w: c.rx_power_w,
+        propagation_mode: c.propagation_mode,
+        sat_name: c.sat_name,
+        sat_mode: c.sat_mode,
+        distance_km: c.distance_km,
+        bearing_deg: c.bearing_deg,
+        sfi: c.sfi,
+        a_index: c.a_index,
+        k_index: c.k_index,
+        created_at,
+        updated_at,
+    };
+    let extras = CommandExtras {
+        exchange_fields: c.exchange_fields,
+        station_location_ref: c.station_location_ref,
+        credits: c.credits,
+    };
+    (qso, extras)
 }
 
 impl LogbookService {
@@ -42,75 +128,45 @@ impl LogbookService {
     }
 
     pub async fn create_qso(&self, command: CreateQsoCommand) -> RepoResult<QsoId> {
-        let (qso, exchange_fields) = self.build_qso_from_command(command);
+        let (qso, extras) = self.build_qso_from_command(command);
         let id = qso.id;
         self.repo.insert_qso(&qso).await?;
-        for field in exchange_fields {
+        for field in extras.exchange_fields {
             self.repo.add_exchange_field(&id, &field).await?;
         }
         Ok(id)
     }
 
     /// Consume a `CreateQsoCommand` and return the fully-built Qso
-    /// (with resolver enrichment applied) plus its exchange_fields.
-    /// Shared by single-record `create_qso` and the batched
+    /// (with resolver enrichment applied) plus the command's non-column
+    /// parts. Shared by single-record `create_qso` and the batched
     /// `import_qsos` path.
-    fn build_qso_from_command(
-        &self,
-        command: CreateQsoCommand,
-    ) -> (Qso, Vec<QsoExchangeField>) {
+    fn build_qso_from_command(&self, command: CreateQsoCommand) -> (Qso, CommandExtras) {
         let now = Utc::now();
-        let id = QsoId::new();
-        let resolution = self.resolver.resolve(&command.call);
+        let (mut qso, extras) = qso_from_command(QsoId::new(), command, now, now);
+        self.enrich(&mut qso);
+        (qso, extras)
+    }
 
-        let mut qso = Qso {
-            id,
-            call: command.call,
-            qso_begin: command.qso_begin,
-            qso_end: command.qso_end,
-            band: command.band,
-            freq_hz: command.freq_hz,
-            mode: command.mode,
-            submode: command.submode,
-            rst_sent: command.rst_sent,
-            rst_rcvd: command.rst_rcvd,
-            operator_id: command.operator_id,
-            station_location_id: command.station_location_id,
-            station_callsign: command.station_callsign,
-            owner_callsign: command.owner_callsign,
-            dxcc_id: command.dxcc_id,
-            dxcc_prefix: command.dxcc_prefix,
-            continent: command.continent,
-            cq_zone: command.cq_zone,
-            itu_zone: command.itu_zone,
-            grid: command.grid,
-            state: command.state,
-            county: command.county,
-            province: command.province,
-            iota: command.iota,
-            tx_power_w: command.tx_power_w,
-            rx_power_w: command.rx_power_w,
-            propagation_mode: command.propagation_mode,
-            sat_name: command.sat_name,
-            sat_mode: command.sat_mode,
-            distance_km: None,
-            bearing_deg: None,
-            created_at: now,
-            updated_at: now,
-        };
-
-        if let Some(res) = resolution {
-            // Operator-supplied values win; resolver only fills blanks.
+    /// Fill DXCC details the record lacks from the resolver.
+    /// Operator-supplied / imported values win; the resolver only fills
+    /// blanks.
+    fn enrich(&self, qso: &mut Qso) {
+        if let Some(res) = self.resolver.resolve(&qso.call) {
             qso.dxcc_id = qso.dxcc_id.or(res.dxcc_id);
-            qso.dxcc_prefix = qso.dxcc_prefix.or(res.dxcc_prefix);
-            qso.continent = qso.continent.or(res.continent);
+            qso.dxcc_prefix = qso.dxcc_prefix.take().or(res.dxcc_prefix);
+            qso.continent = qso.continent.take().or(res.continent);
             qso.cq_zone = qso.cq_zone.or(res.cq_zone);
             qso.itu_zone = qso.itu_zone.or(res.itu_zone);
         }
-
-        (qso, command.exchange_fields)
     }
 
+    /// Batched import (ADIF files, WSJT-X logged QSOs). Besides the QSOs
+    /// themselves this links each one to the station location its record
+    /// names — reusing a location of that exact name, or creating one the
+    /// first time a name is seen — and records its award credit. A record
+    /// that names no location is left unlinked for the operator to assign
+    /// (see `bulk_assign_location_by_search`); slogger does not guess.
     pub async fn import_qsos(
         &self,
         commands: impl IntoIterator<Item = CreateQsoCommand>,
@@ -128,9 +184,22 @@ impl LogbookService {
             }
         };
 
-        let mut new_qsos: Vec<Qso> = Vec::new();
-        let mut new_fields: Vec<(QsoId, QsoExchangeField)> = Vec::new();
-        let mut new_service_states: Vec<ImportedServiceState> = Vec::new();
+        // Same idea for station locations: resolve names against one
+        // up-front load, plus the ones this import creates.
+        let mut locations: HashMap<String, StationLocation> = HashMap::new();
+        match self.repo.load_station_locations().await {
+            Ok(existing) => {
+                for loc in existing {
+                    locations.entry(loc.name.clone()).or_insert(loc);
+                }
+            }
+            Err(e) => {
+                report.errors.push(format!("loading station locations failed: {e}"));
+                return report;
+            }
+        }
+
+        let mut batch = ImportBatch::default();
 
         for cmd in commands {
             // Intra-import dedup: HashSet::insert returns false on
@@ -143,22 +212,55 @@ impl LogbookService {
                 }
             }
 
-            let (qso, exchange_fields) = self.build_qso_from_command(cmd);
+            let (mut qso, extras) = self.build_qso_from_command(cmd);
             let id = qso.id;
-            new_service_states.extend(extract_service_states(id, &exchange_fields));
-            for f in exchange_fields {
-                new_fields.push((id, f));
+            let mut exchange_fields = extras.exchange_fields;
+
+            if let Some(r) = extras.station_location_ref {
+                if qso.station_location_id.is_some() {
+                    // Caller already chose the location; keep what the
+                    // record said about it rather than dropping it.
+                    exchange_fields.extend(r.my_fields.into_iter().map(imported_field));
+                } else {
+                    let loc = locations.entry(r.name.clone()).or_insert_with(|| {
+                        let loc = new_location(&r, &qso);
+                        batch.locations.push(loc.clone());
+                        loc
+                    });
+                    qso.station_location_id = Some(loc.id);
+                    // MY_* values the location doesn't reproduce (this QSO
+                    // was made from a different grid than the location's,
+                    // say) stay with the QSO.
+                    exchange_fields.extend(
+                        r.my_fields
+                            .into_iter()
+                            .filter(|(n, v)| !location_covers(loc, n, v))
+                            .map(imported_field),
+                    );
+                }
             }
-            new_qsos.push(qso);
+
+            batch
+                .service_states
+                .extend(extract_service_states(id, &exchange_fields));
+            batch.credits.extend(
+                extras
+                    .credits
+                    .into_iter()
+                    .map(|credit| imported_credit(&qso, credit)),
+            );
+            batch
+                .exchange_fields
+                .extend(exchange_fields.into_iter().map(|f| (id, f)));
+            batch.qsos.push(qso);
         }
 
-        let created = new_qsos.len();
-        match self
-            .repo
-            .insert_qsos_batch(&new_qsos, &new_fields, &new_service_states)
-            .await
-        {
-            Ok(()) => report.created = created,
+        let created = batch.qsos.len();
+        match self.repo.insert_qsos_batch(&batch).await {
+            Ok(()) => {
+                report.created = created;
+                report.locations_created = batch.locations.len();
+            }
             Err(e) => {
                 report.skipped = created;
                 report.errors.push(format!("batch insert failed: {e}"));
@@ -211,6 +313,7 @@ impl LogbookService {
             qso,
             exchange_fields: self.repo.list_exchange_fields(id).await?,
             service_states: self.repo.list_service_states(id).await?,
+            credits: self.repo.list_credits(id).await?,
         }))
     }
 
@@ -223,51 +326,10 @@ impl LogbookService {
             .get_qso(&id)
             .await?
             .ok_or(RepositoryError::NotFound)?;
-        let resolution = self.resolver.resolve(&command.call);
-
-        let mut qso = Qso {
-            id,
-            call: command.call,
-            qso_begin: command.qso_begin,
-            qso_end: command.qso_end,
-            band: command.band,
-            freq_hz: command.freq_hz,
-            mode: command.mode,
-            submode: command.submode,
-            rst_sent: command.rst_sent,
-            rst_rcvd: command.rst_rcvd,
-            operator_id: command.operator_id,
-            station_location_id: command.station_location_id,
-            station_callsign: command.station_callsign,
-            owner_callsign: command.owner_callsign,
-            dxcc_id: command.dxcc_id,
-            dxcc_prefix: command.dxcc_prefix,
-            continent: command.continent,
-            cq_zone: command.cq_zone,
-            itu_zone: command.itu_zone,
-            grid: command.grid,
-            state: command.state,
-            county: command.county,
-            province: command.province,
-            iota: command.iota,
-            tx_power_w: command.tx_power_w,
-            rx_power_w: command.rx_power_w,
-            propagation_mode: command.propagation_mode,
-            sat_name: command.sat_name,
-            sat_mode: command.sat_mode,
-            distance_km: existing.distance_km,
-            bearing_deg: existing.bearing_deg,
-            created_at: existing.created_at,
-            updated_at: Utc::now(),
-        };
-
-        if let Some(res) = resolution {
-            qso.dxcc_id = qso.dxcc_id.or(res.dxcc_id);
-            qso.dxcc_prefix = qso.dxcc_prefix.or(res.dxcc_prefix);
-            qso.continent = qso.continent.or(res.continent);
-            qso.cq_zone = qso.cq_zone.or(res.cq_zone);
-            qso.itu_zone = qso.itu_zone.or(res.itu_zone);
-        }
+        // Credits and location references only come from import; an
+        // edit carries neither, so the split-off parts are dropped.
+        let (mut qso, _) = qso_from_command(id, command, existing.created_at, Utc::now());
+        self.enrich(&mut qso);
 
         self.repo.update_qso(&qso).await
         // Note: this leaves existing exchange_fields in place. Re-syncing
@@ -386,6 +448,54 @@ impl LogbookService {
         })
     }
 
+    /// Link every QSO the search matches — all of them, not just the
+    /// page the search's limit would return — to `location`. The fix-up
+    /// for QSOs imported without a station location: search for
+    /// unassigned ones (narrowed by date, say) and assign them.
+    pub async fn bulk_assign_location_by_search(
+        &self,
+        search: QsoSearch,
+        location: StationLocationId,
+    ) -> RepoResult<BulkReport> {
+        let matched = self.repo.count_matching(search.clone()).await?;
+        let succeeded = self.repo.assign_station_location(search, location).await?;
+        Ok(BulkReport { matched, succeeded })
+    }
+
+    /// Full-fidelity ADIF for the QSOs `search` matches: every column,
+    /// the station location (by name and `MY_*` details), award credit and
+    /// extra fields, so importing the result into an empty log rebuilds
+    /// the same records. `locations` are the station locations to name
+    /// (QSOs linked to one not in the list are written without it).
+    pub async fn export_adif_by_search(
+        &self,
+        search: QsoSearch,
+        locations: &[StationLocation],
+        opts: &ExportOptions,
+    ) -> RepoResult<String> {
+        let qsos = self.repo.search_full_qsos(search).await?;
+        let mut extras = Vec::with_capacity(qsos.len());
+        for q in &qsos {
+            extras.push((
+                self.repo.list_exchange_fields(&q.id).await?,
+                self.repo.list_credits(&q.id).await?,
+            ));
+        }
+        let records: Vec<ExportRecord<'_>> = qsos
+            .iter()
+            .zip(&extras)
+            .map(|(qso, (fields, credits))| ExportRecord {
+                qso,
+                location: qso
+                    .station_location_id
+                    .and_then(|id| locations.iter().find(|l| l.id == id)),
+                credits,
+                extra_fields: fields,
+            })
+            .collect();
+        Ok(export_adif_records(&records, opts))
+    }
+
     /// Count without fetching — for "Delete N QSOs?" confirmations.
     pub async fn count_matching(&self, search: QsoSearch) -> RepoResult<usize> {
         self.repo.count_matching(search).await
@@ -408,17 +518,97 @@ pub struct BulkReport {
     pub succeeded: usize,
 }
 
-/// Build the dedup key for an inbound `CreateQsoCommand`. Returns
-/// `None` when `station_callsign` is missing, matching the
-/// `is_duplicate` semantics: without a station call we can't tell
-/// whose log it belongs to so we don't claim a duplicate.
+/// Build the dedup key for an inbound `CreateQsoCommand`: station call,
+/// worked call, start time to the second, band and mode.
+///
+/// The start time, not just the date, is part of the key. Working the
+/// same station twice in a day on one band and mode is routine (two
+/// sessions of a weekly contest, a sprint followed by a ragchew), and a
+/// date-only key silently dropped about a thousand such QSOs from a real
+/// 48k-record log. Re-importing the same file still dedups exactly.
+///
+/// Returns `None` when `station_callsign` is missing: without a station
+/// call we can't tell whose log it belongs to, so we don't claim a
+/// duplicate.
 fn dedup_key(cmd: &CreateQsoCommand) -> Option<DedupKey> {
     let station = cmd.station_callsign.as_ref()?.as_str().to_string();
     let call = cmd.call.as_str().to_string();
-    let date = cmd.qso_begin.format("%Y-%m-%d").to_string();
+    // Same shape as the first 19 characters of the stored RFC 3339
+    // timestamp, which is what `load_dedup_keys` reads back.
+    let begin = cmd.qso_begin.format("%Y-%m-%dT%H:%M:%S").to_string();
     let band = cmd.band.map(|b| b.as_adif().to_string());
     let mode = cmd.mode.as_ref().map(|m| m.as_adif().to_string());
-    Some((station, call, date, band, mode))
+    Some((station, call, begin, band, mode))
+}
+
+/// A location created by import for a QTH name not seen before. It takes
+/// its callsigns from the first QSO that names it and whatever `MY_*`
+/// details that record carries; the rest is left for the operator.
+fn new_location(r: &StationLocationRef, qso: &Qso) -> StationLocation {
+    let now = Utc::now();
+    let mut loc = StationLocation {
+        id: StationLocationId::new(),
+        name: r.name.clone(),
+        station_callsign: qso.station_callsign.clone(),
+        owner_callsign: qso.owner_callsign.clone(),
+        city: None,
+        county: None,
+        state: None,
+        country: None,
+        grid: None,
+        latitude: None,
+        longitude: None,
+        cq_zone: None,
+        itu_zone: None,
+        iota: None,
+        lotw_station_location: None,
+        eqsl_account: None,
+        created_at: now,
+        updated_at: now,
+    };
+    fill_location(&mut loc, &r.my_fields);
+    loc
+}
+
+fn imported_field((name, raw_value): (String, String)) -> QsoExchangeField {
+    QsoExchangeField {
+        name,
+        raw_value,
+        normalized_value: None,
+        source: FieldSource::ImportedAdif,
+    }
+}
+
+/// The credit row for `credit` on `qso`, with the QSO's details as the
+/// award sponsor would list them.
+fn imported_credit(qso: &Qso, credit: AwardCredit) -> ImportedCredit {
+    ImportedCredit {
+        qso_id: qso.id,
+        unit: credit_unit(&credit.award, qso),
+        credit,
+        call: qso.call.as_str().to_string(),
+        qso_date: qso.qso_begin.format("%Y-%m-%d").to_string(),
+        band: qso.band.map(|b| b.as_adif().to_string()),
+        mode: qso.mode.as_ref().map(|m| m.as_adif().to_string()),
+    }
+}
+
+/// What an award counts: the DXCC entity for the DXCC family (DXCC,
+/// DXCC_BAND, DXCC_MODE), the state for WAS, the four-character grid
+/// square for VUCC. Empty for awards slogger has no unit for.
+fn credit_unit(award: &str, qso: &Qso) -> String {
+    let unit = if award.starts_with("DXCC") {
+        qso.dxcc_id.map(|id| id.to_string())
+    } else if award == "WAS" {
+        qso.state.clone()
+    } else if award.starts_with("VUCC") {
+        qso.grid
+            .as_deref()
+            .map(|g| g.chars().take(4).collect::<String>().to_ascii_uppercase())
+    } else {
+        None
+    };
+    unit.unwrap_or_default()
 }
 
 fn parse_adif_date(s: &str) -> Option<DateTime<Utc>> {
@@ -452,7 +642,8 @@ fn get_field<'a>(fields: &'a [QsoExchangeField], name: &str) -> Option<&'a str> 
 ///   re-upload) emits no row — defaults to pending.
 /// - QRZ: `QRZCOM_QSO_UPLOAD_STATUS=Y` → uploaded (date from
 ///   `QRZCOM_QSO_UPLOAD_DATE`); `QRZCOM_QSO_DOWNLOAD_STATUS=Y` →
-///   confirmed (date from `QRZCOM_QSO_DOWNLOAD_DATE`).
+///   confirmed (date from `QRZCOM_QSO_DOWNLOAD_DATE`). DXKeeper's
+///   `APP_DXKEEPER_QRZCOM_LOGID` becomes the row's `remote_id`.
 /// - HRDLog: `HRDLOG_QSO_UPLOAD_STATUS=Y` → uploaded (date from
 ///   `HRDLOG_QSO_UPLOAD_DATE`).
 ///
@@ -491,6 +682,7 @@ pub(crate) fn extract_service_states(
                 confirmation_state: confirm,
                 uploaded_at: if upload.is_some() { send_date } else { None },
                 confirmed_at: if confirm.is_some() { recv_date } else { None },
+                remote_id: None,
             });
         }
     }
@@ -514,6 +706,7 @@ pub(crate) fn extract_service_states(
                 confirmation_state: confirm,
                 uploaded_at: if upload.is_some() { send_date } else { None },
                 confirmed_at: if confirm.is_some() { recv_date } else { None },
+                remote_id: None,
             });
         }
     }
@@ -530,6 +723,7 @@ pub(crate) fn extract_service_states(
                 confirmation_state: None,
                 uploaded_at: None,
                 confirmed_at: None,
+                remote_id: None,
             });
         }
         // status = "M" (modified — re-upload needed) emits no row;
@@ -545,9 +739,16 @@ pub(crate) fn extract_service_states(
             .map(|s| s.trim().to_ascii_uppercase());
         let dn_date = get_field(fields, "QRZCOM_QSO_DOWNLOAD_DATE").and_then(parse_adif_date);
 
+        let log_id = get_field(fields, "APP_DXKEEPER_QRZCOM_LOGID")
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+
         let upload = (up_status.as_deref() == Some("Y")).then_some("uploaded");
         let confirm = (dn_status.as_deref() == Some("Y")).then_some("confirmed");
-        if upload.is_some() || confirm.is_some() {
+        // A QRZ logbook id alone still gets a row, to hold the id; with
+        // no status signal it stays pending (e.g. `M`, modified since
+        // upload), as it would without the id.
+        if upload.is_some() || confirm.is_some() || log_id.is_some() {
             out.push(ImportedServiceState {
                 qso_id,
                 service: "qrz",
@@ -555,6 +756,7 @@ pub(crate) fn extract_service_states(
                 confirmation_state: confirm,
                 uploaded_at: if upload.is_some() { up_date } else { None },
                 confirmed_at: if confirm.is_some() { dn_date } else { None },
+                remote_id: log_id.map(String::from),
             });
         }
     }
@@ -572,6 +774,7 @@ pub(crate) fn extract_service_states(
                 confirmation_state: None,
                 uploaded_at: date,
                 confirmed_at: None,
+                remote_id: None,
             });
         }
     }

@@ -4,10 +4,11 @@ use sqlx::{Row, SqlitePool};
 use uuid::Uuid;
 
 use logbook_domain::{
-    AwardQso, DedupKey, ImportedServiceState, QsoRepository, QsoSearch, QsoServiceState,
-    QsoSummary, RepoResult, RepositoryError,
+    AwardCredit, AwardQso, CreditStatus, DedupKey, ImportBatch, LocationFilter, QsoRepository,
+    QsoSearch, QsoServiceState, QsoSummary, RepoResult, RepositoryError,
 };
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::sync::LazyLock;
 
 /// Type-preserving bind for the filter builder. We can't just collect
 /// `Vec<String>` because dxcc_id is bound as i64 and binding it as text
@@ -44,9 +45,13 @@ fn build_filter(query: &QsoSearch) -> (String, Vec<DynBind>) {
         sql.push_str(" AND q.dxcc_id = ?");
         binds.push(DynBind::Int(dxcc_id as i64));
     }
-    if let Some(loc_id) = query.station_location_id {
-        sql.push_str(" AND q.station_location_id = ?");
-        binds.push(DynBind::Text(fmt_id(loc_id.as_uuid())));
+    match query.station_location {
+        LocationFilter::Any => {}
+        LocationFilter::Unassigned => sql.push_str(" AND q.station_location_id IS NULL"),
+        LocationFilter::Is(loc_id) => {
+            sql.push_str(" AND q.station_location_id = ?");
+            binds.push(DynBind::Text(fmt_id(loc_id.as_uuid())));
+        }
     }
     if let Some(from) = &query.from {
         sql.push_str(" AND q.qso_begin >= ?");
@@ -78,10 +83,176 @@ fn build_filter(query: &QsoSearch) -> (String, Vec<DynBind>) {
 }
 use radio_core::{
     Band, Callsign, FieldSource, Mode, OperatorId, PropagationMode, Qso, QsoExchangeField, QsoId,
-    StationLocationId,
+    StationLocation, StationLocationId,
 };
 
 use crate::db::Database;
+use crate::station_repo::{insert_location_sql, row_to_location};
+
+/// The `qsos` columns a record writes, other than `id` and the
+/// timestamps, in the order `bind_qso_columns` binds them. Shared by the
+/// single-row insert, the update and the import batch so the three can't
+/// drift apart.
+const QSO_COLUMNS: &[&str] = &[
+    "call",
+    "qso_begin",
+    "qso_end",
+    "band",
+    "freq_hz",
+    "mode",
+    "submode",
+    "rst_sent",
+    "rst_rcvd",
+    "operator_id",
+    "station_location_id",
+    "station_callsign",
+    "owner_callsign",
+    "operator_callsign",
+    "dxcc_id",
+    "dxcc_prefix",
+    "wpx_prefix",
+    "continent",
+    "cq_zone",
+    "itu_zone",
+    "grid",
+    "state",
+    "county",
+    "province",
+    "iota",
+    "latitude",
+    "longitude",
+    "name",
+    "qth",
+    "address",
+    "email",
+    "age",
+    "qsl_via",
+    "comment",
+    "contest_id",
+    "serial_sent",
+    "serial_rcvd",
+    "exchange_sent",
+    "exchange_rcvd",
+    "arrl_section",
+    "band_rx",
+    "freq_rx_hz",
+    "tx_power_w",
+    "rx_power_w",
+    "propagation_mode",
+    "sat_name",
+    "sat_mode",
+    "distance_km",
+    "bearing_deg",
+    "sfi",
+    "a_index",
+    "k_index",
+];
+
+static INSERT_QSO_SQL: LazyLock<String> = LazyLock::new(|| {
+    format!(
+        "INSERT INTO qsos (id, {}, created_at, updated_at) VALUES (?, {}, ?, ?)",
+        QSO_COLUMNS.join(", "),
+        vec!["?"; QSO_COLUMNS.len()].join(", "),
+    )
+});
+
+static UPDATE_QSO_SQL: LazyLock<String> = LazyLock::new(|| {
+    let sets: Vec<String> = QSO_COLUMNS.iter().map(|c| format!("{c} = ?")).collect();
+    format!("UPDATE qsos SET {}, updated_at = ? WHERE id = ?", sets.join(", "))
+});
+
+type SqliteQuery<'q> = sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments<'q>>;
+
+/// Bind `q`'s columns in `QSO_COLUMNS` order.
+fn bind_qso_columns<'q>(query: SqliteQuery<'q>, q: &'q Qso) -> SqliteQuery<'q> {
+    let call = |c: &Option<Callsign>| c.as_ref().map(|c| c.as_str().to_string());
+    query
+        .bind(q.call.as_str())
+        .bind(fmt_dt(&q.qso_begin))
+        .bind(q.qso_end.as_ref().map(fmt_dt))
+        .bind(q.band.map(|b| b.as_adif().to_string()))
+        .bind(q.freq_hz)
+        .bind(q.mode.as_ref().map(|m| m.as_adif().to_string()))
+        .bind(&q.submode)
+        .bind(&q.rst_sent)
+        .bind(&q.rst_rcvd)
+        .bind(q.operator_id.map(|id| fmt_id(id.as_uuid())))
+        .bind(q.station_location_id.map(|id| fmt_id(id.as_uuid())))
+        .bind(call(&q.station_callsign))
+        .bind(call(&q.owner_callsign))
+        .bind(call(&q.operator_callsign))
+        .bind(q.dxcc_id.map(|v| v as i64))
+        .bind(&q.dxcc_prefix)
+        .bind(&q.wpx_prefix)
+        .bind(&q.continent)
+        .bind(q.cq_zone.map(|v| v as i64))
+        .bind(q.itu_zone.map(|v| v as i64))
+        .bind(&q.grid)
+        .bind(&q.state)
+        .bind(&q.county)
+        .bind(&q.province)
+        .bind(&q.iota)
+        .bind(q.latitude)
+        .bind(q.longitude)
+        .bind(&q.name)
+        .bind(&q.qth)
+        .bind(&q.address)
+        .bind(&q.email)
+        .bind(q.age.map(|v| v as i64))
+        .bind(&q.qsl_via)
+        .bind(&q.comment)
+        .bind(&q.contest_id)
+        .bind(q.serial_sent)
+        .bind(q.serial_rcvd)
+        .bind(&q.exchange_sent)
+        .bind(&q.exchange_rcvd)
+        .bind(&q.arrl_section)
+        .bind(q.band_rx.map(|b| b.as_adif().to_string()))
+        .bind(q.freq_rx_hz)
+        .bind(q.tx_power_w.map(|v| v as f64))
+        .bind(q.rx_power_w.map(|v| v as f64))
+        .bind(q.propagation_mode.as_ref().map(propagation_to_str))
+        .bind(&q.sat_name)
+        .bind(&q.sat_mode)
+        .bind(q.distance_km)
+        .bind(q.bearing_deg)
+        .bind(q.sfi.map(|v| v as i64))
+        .bind(q.a_index.map(|v| v as i64))
+        .bind(q.k_index.map(|v| v as i64))
+}
+
+/// `INSERT INTO qsos` for `q`, ready to execute.
+fn insert_qso_query(q: &Qso) -> SqliteQuery<'_> {
+    let query = sqlx::query(INSERT_QSO_SQL.as_str()).bind(fmt_id(q.id.as_uuid()));
+    bind_qso_columns(query, q)
+        .bind(fmt_dt(&q.created_at))
+        .bind(fmt_dt(&q.updated_at))
+}
+
+/// JSON string literal for `s`. `award_credit_imports.raw_json` holds a
+/// two-key object; building it by hand saves a serde_json dependency.
+fn json_str(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for ch in s.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+fn credit_raw_json(credit: &AwardCredit) -> String {
+    format!(
+        "{{\"medium\":{},\"status\":{}}}",
+        credit.medium.as_deref().map(json_str).unwrap_or_else(|| "null".into()),
+        json_str(credit.status.as_storage_str()),
+    )
+}
 
 #[derive(Debug)]
 pub struct SqliteQsoRepository {
@@ -169,6 +340,7 @@ fn row_to_qso(row: &sqlx::sqlite::SqliteRow) -> RepoResult<Qso> {
         row.try_get("station_location_id").map_err(map_err)?;
     let station_callsign: Option<String> = row.try_get("station_callsign").map_err(map_err)?;
     let owner_callsign: Option<String> = row.try_get("owner_callsign").map_err(map_err)?;
+    let operator_callsign: Option<String> = row.try_get("operator_callsign").map_err(map_err)?;
     let dxcc_id: Option<i64> = row.try_get("dxcc_id").map_err(map_err)?;
     let dxcc_prefix: Option<String> = row.try_get("dxcc_prefix").map_err(map_err)?;
     let continent: Option<String> = row.try_get("continent").map_err(map_err)?;
@@ -186,6 +358,9 @@ fn row_to_qso(row: &sqlx::sqlite::SqliteRow) -> RepoResult<Qso> {
     let sat_mode: Option<String> = row.try_get("sat_mode").map_err(map_err)?;
     let distance_km: Option<f64> = row.try_get("distance_km").map_err(map_err)?;
     let bearing_deg: Option<f64> = row.try_get("bearing_deg").map_err(map_err)?;
+    let text = |col: &str| -> RepoResult<Option<String>> { row.try_get(col).map_err(map_err) };
+    let int = |col: &str| -> RepoResult<Option<i64>> { row.try_get(col).map_err(map_err) };
+    let real = |col: &str| -> RepoResult<Option<f64>> { row.try_get(col).map_err(map_err) };
     let created_at: String = row.try_get("created_at").map_err(map_err)?;
     let updated_at: String = row.try_get("updated_at").map_err(map_err)?;
 
@@ -212,8 +387,10 @@ fn row_to_qso(row: &sqlx::sqlite::SqliteRow) -> RepoResult<Qso> {
             .map(StationLocationId::from_uuid),
         station_callsign: station_callsign.as_deref().map(parse_callsign).transpose()?,
         owner_callsign: owner_callsign.as_deref().map(parse_callsign).transpose()?,
+        operator_callsign: operator_callsign.as_deref().map(parse_callsign).transpose()?,
         dxcc_id: dxcc_id.map(|v| v as u16),
         dxcc_prefix,
+        wpx_prefix: text("wpx_prefix")?,
         continent,
         cq_zone: cq_zone.map(|v| v as u8),
         itu_zone: itu_zone.map(|v| v as u8),
@@ -222,6 +399,23 @@ fn row_to_qso(row: &sqlx::sqlite::SqliteRow) -> RepoResult<Qso> {
         county,
         province,
         iota,
+        latitude: real("latitude")?,
+        longitude: real("longitude")?,
+        name: text("name")?,
+        qth: text("qth")?,
+        address: text("address")?,
+        email: text("email")?,
+        age: int("age")?.map(|v| v as u16),
+        qsl_via: text("qsl_via")?,
+        comment: text("comment")?,
+        contest_id: text("contest_id")?,
+        serial_sent: int("serial_sent")?,
+        serial_rcvd: int("serial_rcvd")?,
+        exchange_sent: text("exchange_sent")?,
+        exchange_rcvd: text("exchange_rcvd")?,
+        arrl_section: text("arrl_section")?,
+        band_rx: text("band_rx")?.as_deref().and_then(Band::from_adif),
+        freq_rx_hz: int("freq_rx_hz")?,
         tx_power_w: tx_power_w.map(|v| v as f32),
         rx_power_w: rx_power_w.map(|v| v as f32),
         propagation_mode: propagation_mode.as_deref().map(propagation_from_str),
@@ -229,6 +423,9 @@ fn row_to_qso(row: &sqlx::sqlite::SqliteRow) -> RepoResult<Qso> {
         sat_mode,
         distance_km,
         bearing_deg,
+        sfi: int("sfi")?.map(|v| v as u16),
+        a_index: int("a_index")?.map(|v| v as u16),
+        k_index: int("k_index")?.map(|v| v as u8),
         created_at: parse_dt(&created_at)?,
         updated_at: parse_dt(&updated_at)?,
     })
@@ -237,127 +434,20 @@ fn row_to_qso(row: &sqlx::sqlite::SqliteRow) -> RepoResult<Qso> {
 #[async_trait]
 impl QsoRepository for SqliteQsoRepository {
     async fn insert_qso(&self, qso: &Qso) -> RepoResult<()> {
-        sqlx::query(
-            r#"
-            INSERT INTO qsos (
-                id, call, qso_begin, qso_end,
-                band, freq_hz, mode, submode,
-                rst_sent, rst_rcvd,
-                operator_id, station_location_id,
-                station_callsign, owner_callsign,
-                dxcc_id, dxcc_prefix, continent, cq_zone, itu_zone,
-                grid, state, county, province, iota,
-                tx_power_w, rx_power_w,
-                propagation_mode, sat_name, sat_mode,
-                distance_km, bearing_deg,
-                created_at, updated_at
-            ) VALUES (
-                ?, ?, ?, ?,
-                ?, ?, ?, ?,
-                ?, ?,
-                ?, ?,
-                ?, ?,
-                ?, ?, ?, ?, ?,
-                ?, ?, ?, ?, ?,
-                ?, ?,
-                ?, ?, ?,
-                ?, ?,
-                ?, ?
-            )
-            "#,
-        )
-        .bind(fmt_id(qso.id.as_uuid()))
-        .bind(qso.call.as_str())
-        .bind(fmt_dt(&qso.qso_begin))
-        .bind(qso.qso_end.as_ref().map(fmt_dt))
-        .bind(qso.band.map(|b| b.as_adif().to_string()))
-        .bind(qso.freq_hz)
-        .bind(qso.mode.as_ref().map(|m| m.as_adif().to_string()))
-        .bind(&qso.submode)
-        .bind(&qso.rst_sent)
-        .bind(&qso.rst_rcvd)
-        .bind(qso.operator_id.map(|id| fmt_id(id.as_uuid())))
-        .bind(qso.station_location_id.map(|id| fmt_id(id.as_uuid())))
-        .bind(qso.station_callsign.as_ref().map(|c| c.as_str().to_string()))
-        .bind(qso.owner_callsign.as_ref().map(|c| c.as_str().to_string()))
-        .bind(qso.dxcc_id.map(|v| v as i64))
-        .bind(&qso.dxcc_prefix)
-        .bind(&qso.continent)
-        .bind(qso.cq_zone.map(|v| v as i64))
-        .bind(qso.itu_zone.map(|v| v as i64))
-        .bind(&qso.grid)
-        .bind(&qso.state)
-        .bind(&qso.county)
-        .bind(&qso.province)
-        .bind(&qso.iota)
-        .bind(qso.tx_power_w.map(|v| v as f64))
-        .bind(qso.rx_power_w.map(|v| v as f64))
-        .bind(qso.propagation_mode.as_ref().map(propagation_to_str))
-        .bind(&qso.sat_name)
-        .bind(&qso.sat_mode)
-        .bind(qso.distance_km)
-        .bind(qso.bearing_deg)
-        .bind(fmt_dt(&qso.created_at))
-        .bind(fmt_dt(&qso.updated_at))
-        .execute(&self.pool)
-        .await
-        .map_err(map_err)?;
+        insert_qso_query(qso)
+            .execute(&self.pool)
+            .await
+            .map_err(map_err)?;
         Ok(())
     }
 
     async fn update_qso(&self, qso: &Qso) -> RepoResult<()> {
-        sqlx::query(
-            r#"
-            UPDATE qsos SET
-                call = ?, qso_begin = ?, qso_end = ?,
-                band = ?, freq_hz = ?, mode = ?, submode = ?,
-                rst_sent = ?, rst_rcvd = ?,
-                operator_id = ?, station_location_id = ?,
-                station_callsign = ?, owner_callsign = ?,
-                dxcc_id = ?, dxcc_prefix = ?, continent = ?, cq_zone = ?, itu_zone = ?,
-                grid = ?, state = ?, county = ?, province = ?, iota = ?,
-                tx_power_w = ?, rx_power_w = ?,
-                propagation_mode = ?, sat_name = ?, sat_mode = ?,
-                distance_km = ?, bearing_deg = ?,
-                updated_at = ?
-            WHERE id = ?
-            "#,
-        )
-        .bind(qso.call.as_str())
-        .bind(fmt_dt(&qso.qso_begin))
-        .bind(qso.qso_end.as_ref().map(fmt_dt))
-        .bind(qso.band.map(|b| b.as_adif().to_string()))
-        .bind(qso.freq_hz)
-        .bind(qso.mode.as_ref().map(|m| m.as_adif().to_string()))
-        .bind(&qso.submode)
-        .bind(&qso.rst_sent)
-        .bind(&qso.rst_rcvd)
-        .bind(qso.operator_id.map(|id| fmt_id(id.as_uuid())))
-        .bind(qso.station_location_id.map(|id| fmt_id(id.as_uuid())))
-        .bind(qso.station_callsign.as_ref().map(|c| c.as_str().to_string()))
-        .bind(qso.owner_callsign.as_ref().map(|c| c.as_str().to_string()))
-        .bind(qso.dxcc_id.map(|v| v as i64))
-        .bind(&qso.dxcc_prefix)
-        .bind(&qso.continent)
-        .bind(qso.cq_zone.map(|v| v as i64))
-        .bind(qso.itu_zone.map(|v| v as i64))
-        .bind(&qso.grid)
-        .bind(&qso.state)
-        .bind(&qso.county)
-        .bind(&qso.province)
-        .bind(&qso.iota)
-        .bind(qso.tx_power_w.map(|v| v as f64))
-        .bind(qso.rx_power_w.map(|v| v as f64))
-        .bind(qso.propagation_mode.as_ref().map(propagation_to_str))
-        .bind(&qso.sat_name)
-        .bind(&qso.sat_mode)
-        .bind(qso.distance_km)
-        .bind(qso.bearing_deg)
-        .bind(fmt_dt(&qso.updated_at))
-        .bind(fmt_id(qso.id.as_uuid()))
-        .execute(&self.pool)
-        .await
-        .map_err(map_err)?;
+        bind_qso_columns(sqlx::query(UPDATE_QSO_SQL.as_str()), qso)
+            .bind(fmt_dt(&qso.updated_at))
+            .bind(fmt_id(qso.id.as_uuid()))
+            .execute(&self.pool)
+            .await
+            .map_err(map_err)?;
         Ok(())
     }
 
@@ -435,6 +525,42 @@ impl QsoRepository for SqliteQsoRepository {
                 uploaded_at: uploaded_at.as_deref().map(parse_dt).transpose()?,
                 confirmed_at: confirmed_at.as_deref().map(parse_dt).transpose()?,
                 last_error: row.try_get("last_error").map_err(map_err)?,
+            });
+        }
+        Ok(out)
+    }
+
+    async fn list_credits(&self, qso_id: &QsoId) -> RepoResult<Vec<AwardCredit>> {
+        // rowid order is insertion order: the order the record listed them.
+        let rows = sqlx::query(
+            r#"
+            SELECT d.name AS award,
+                   json_extract(i.raw_json, '$.medium') AS medium,
+                   l.link_status
+            FROM award_credit_links l
+            JOIN award_credit_imports i ON i.id = l.credit_import_id
+            JOIN award_definitions d ON d.id = i.award_id
+            WHERE l.qso_id = ?
+            ORDER BY l.rowid
+            "#,
+        )
+        .bind(fmt_id(qso_id.as_uuid()))
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_err)?;
+
+        let mut out = Vec::with_capacity(rows.len());
+        for row in &rows {
+            let status: String = row.try_get("link_status").map_err(map_err)?;
+            // Links in another state (a future "rejected" review outcome)
+            // aren't credit the QSO carries.
+            let Some(status) = CreditStatus::parse_storage(&status) else {
+                continue;
+            };
+            out.push(AwardCredit {
+                award: row.try_get("award").map_err(map_err)?,
+                medium: row.try_get("medium").map_err(map_err)?,
+                status,
             });
         }
         Ok(out)
@@ -569,6 +695,36 @@ impl QsoRepository for SqliteQsoRepository {
         let row = q.fetch_one(&self.pool).await.map_err(map_err)?;
         let n: i64 = row.try_get("n").map_err(map_err)?;
         Ok(n.max(0) as usize)
+    }
+
+    async fn assign_station_location(
+        &self,
+        query: QsoSearch,
+        location: StationLocationId,
+    ) -> RepoResult<usize> {
+        let (filter_sql, binds) = build_filter(&query);
+        // The filter may reference the LotW join, so select the ids
+        // through the same FROM as the searches.
+        let mut sql = String::from(
+            "UPDATE qsos SET station_location_id = ?, updated_at = ? \
+             WHERE id IN (SELECT q.id FROM qsos q \
+             LEFT JOIN qso_service_state s ON s.qso_id = q.id AND s.service = 'lotw' \
+             WHERE q.deleted_at IS NULL",
+        );
+        sql.push_str(&filter_sql);
+        sql.push(')');
+
+        let mut q = sqlx::query(&sql)
+            .bind(fmt_id(location.as_uuid()))
+            .bind(fmt_dt(&Utc::now()));
+        for b in binds {
+            q = match b {
+                DynBind::Text(s) => q.bind(s),
+                DynBind::Int(i) => q.bind(i),
+            };
+        }
+        let done = q.execute(&self.pool).await.map_err(map_err)?;
+        Ok(done.rows_affected() as usize)
     }
 
     async fn list_pending_uploads(
@@ -742,7 +898,13 @@ impl QsoRepository for SqliteQsoRepository {
     async fn list_award_qsos(&self) -> RepoResult<Vec<AwardQso>> {
         let sql = "SELECT q.id, q.call, q.qso_begin, q.band, q.mode,
                           q.dxcc_id, q.dxcc_prefix, q.continent, q.state, q.iota,
-                          COALESCE(s.confirmation_state = 'confirmed', 0) AS lotw_confirmed
+                          COALESCE(s.confirmation_state = 'confirmed', 0) AS lotw_confirmed,
+                          (SELECT group_concat(d.name, ',')
+                           FROM award_credit_links l
+                           JOIN award_credit_imports i ON i.id = l.credit_import_id
+                           JOIN award_definitions d ON d.id = i.award_id
+                           WHERE l.qso_id = q.id AND l.link_status = 'granted'
+                          ) AS granted_credits
                    FROM qsos q
                    LEFT JOIN qso_service_state s ON s.qso_id = q.id AND s.service = 'lotw'
                    WHERE q.deleted_at IS NULL";
@@ -763,6 +925,7 @@ impl QsoRepository for SqliteQsoRepository {
             let state: Option<String> = row.try_get("state").map_err(map_err)?;
             let iota: Option<String> = row.try_get("iota").map_err(map_err)?;
             let confirmed: i64 = row.try_get("lotw_confirmed").map_err(map_err)?;
+            let granted: Option<String> = row.try_get("granted_credits").map_err(map_err)?;
             out.push(AwardQso {
                 id: QsoId::from_uuid(parse_uuid(&id)?),
                 call: parse_callsign(&call)?,
@@ -775,6 +938,9 @@ impl QsoRepository for SqliteQsoRepository {
                 state,
                 iota,
                 lotw_confirmed: confirmed != 0,
+                granted_credits: granted
+                    .map(|g| g.split(',').map(String::from).collect())
+                    .unwrap_or_default(),
             });
         }
         Ok(out)
@@ -818,14 +984,13 @@ impl QsoRepository for SqliteQsoRepository {
     }
 
     async fn load_dedup_keys(&self) -> RepoResult<HashSet<DedupKey>> {
-        // Mirrors the keys used by find_match_for_confirmation: station
-        // callsign + worked call + UTC date (yyyy-mm-dd) + band + mode.
-        // Only QSOs with station_callsign set qualify (the per-record
-        // dedup path skips when station is None, see service.rs:142-160).
+        // Station callsign + worked call + UTC start time to the second
+        // + band + mode; must match `dedup_key` in service.rs. Only QSOs
+        // with station_callsign set qualify.
         let rows = sqlx::query(
             r#"
             SELECT station_callsign, call,
-                   substr(qso_begin, 1, 10) AS date_only,
+                   substr(qso_begin, 1, 19) AS begin_second,
                    band, mode
             FROM qsos
             WHERE deleted_at IS NULL
@@ -840,7 +1005,7 @@ impl QsoRepository for SqliteQsoRepository {
         for row in rows {
             let station: String = row.try_get("station_callsign").map_err(map_err)?;
             let call: String = row.try_get("call").map_err(map_err)?;
-            let date: String = row.try_get("date_only").map_err(map_err)?;
+            let date: String = row.try_get("begin_second").map_err(map_err)?;
             let band: Option<String> = row.try_get("band").map_err(map_err)?;
             let mode: Option<String> = row.try_get("mode").map_err(map_err)?;
             out.insert((station, call, date, band, mode));
@@ -848,89 +1013,40 @@ impl QsoRepository for SqliteQsoRepository {
         Ok(out)
     }
 
-    async fn insert_qsos_batch(
-        &self,
-        qsos: &[Qso],
-        exchange_fields: &[(QsoId, QsoExchangeField)],
-        service_states: &[ImportedServiceState],
-    ) -> RepoResult<()> {
-        // One transaction, three INSERT loops. Per-row binds are the
-        // same as the corresponding single-row methods (insert_qso,
+    async fn load_station_locations(&self) -> RepoResult<Vec<StationLocation>> {
+        let rows = sqlx::query("SELECT * FROM station_locations ORDER BY created_at, rowid")
+            .fetch_all(&self.pool)
+            .await
+            .map_err(map_err)?;
+        rows.iter().map(row_to_location).collect()
+    }
+
+    async fn insert_qsos_batch(&self, batch: &ImportBatch) -> RepoResult<()> {
+        // One transaction, one INSERT loop per table. Per-row binds are
+        // the same as the corresponding single-row methods (insert_qso,
         // add_exchange_field, mark_uploaded/mark_upload_verified/
-        // mark_confirmed) — we just swap the executor from `&self.pool`
-        // for `&mut tx`. ~50k QSOs → one commit instead of ~1.5M.
+        // mark_confirmed, StationRepository::insert_location) — we just
+        // swap the executor from `&self.pool` for `&mut tx`. ~50k QSOs →
+        // one commit instead of ~1.5M.
         let mut tx = self.pool.begin().await.map_err(map_err)?;
         let now = fmt_dt(&Utc::now());
 
-        for q in qsos {
-            sqlx::query(
-                r#"
-                INSERT INTO qsos (
-                    id, call, qso_begin, qso_end,
-                    band, freq_hz, mode, submode,
-                    rst_sent, rst_rcvd,
-                    operator_id, station_location_id,
-                    station_callsign, owner_callsign,
-                    dxcc_id, dxcc_prefix, continent, cq_zone, itu_zone,
-                    grid, state, county, province, iota,
-                    tx_power_w, rx_power_w,
-                    propagation_mode, sat_name, sat_mode,
-                    distance_km, bearing_deg,
-                    created_at, updated_at
-                ) VALUES (
-                    ?, ?, ?, ?,
-                    ?, ?, ?, ?,
-                    ?, ?,
-                    ?, ?,
-                    ?, ?,
-                    ?, ?, ?, ?, ?,
-                    ?, ?, ?, ?, ?,
-                    ?, ?,
-                    ?, ?, ?,
-                    ?, ?,
-                    ?, ?
-                )
-                "#,
-            )
-            .bind(fmt_id(q.id.as_uuid()))
-            .bind(q.call.as_str())
-            .bind(fmt_dt(&q.qso_begin))
-            .bind(q.qso_end.as_ref().map(fmt_dt))
-            .bind(q.band.map(|b| b.as_adif().to_string()))
-            .bind(q.freq_hz)
-            .bind(q.mode.as_ref().map(|m| m.as_adif().to_string()))
-            .bind(&q.submode)
-            .bind(&q.rst_sent)
-            .bind(&q.rst_rcvd)
-            .bind(q.operator_id.map(|id| fmt_id(id.as_uuid())))
-            .bind(q.station_location_id.map(|id| fmt_id(id.as_uuid())))
-            .bind(q.station_callsign.as_ref().map(|c| c.as_str().to_string()))
-            .bind(q.owner_callsign.as_ref().map(|c| c.as_str().to_string()))
-            .bind(q.dxcc_id.map(|v| v as i64))
-            .bind(&q.dxcc_prefix)
-            .bind(&q.continent)
-            .bind(q.cq_zone.map(|v| v as i64))
-            .bind(q.itu_zone.map(|v| v as i64))
-            .bind(&q.grid)
-            .bind(&q.state)
-            .bind(&q.county)
-            .bind(&q.province)
-            .bind(&q.iota)
-            .bind(q.tx_power_w.map(|v| v as f64))
-            .bind(q.rx_power_w.map(|v| v as f64))
-            .bind(q.propagation_mode.as_ref().map(propagation_to_str))
-            .bind(&q.sat_name)
-            .bind(&q.sat_mode)
-            .bind(q.distance_km)
-            .bind(q.bearing_deg)
-            .bind(fmt_dt(&q.created_at))
-            .bind(fmt_dt(&q.updated_at))
-            .execute(&mut *tx)
-            .await
-            .map_err(map_err)?;
+        // Locations before the QSOs that reference them (foreign key).
+        for loc in &batch.locations {
+            insert_location_sql(loc)
+                .execute(&mut *tx)
+                .await
+                .map_err(map_err)?;
         }
 
-        for (qso_id, field) in exchange_fields {
+        for q in &batch.qsos {
+            insert_qso_query(q)
+                .execute(&mut *tx)
+                .await
+                .map_err(map_err)?;
+        }
+
+        for (qso_id, field) in &batch.exchange_fields {
             let id = Uuid::new_v4();
             sqlx::query(
                 r#"
@@ -951,7 +1067,7 @@ impl QsoRepository for SqliteQsoRepository {
             .map_err(map_err)?;
         }
 
-        for s in service_states {
+        for s in &batch.service_states {
             // Defaults match the schema's "fresh row, no signal yet"
             // semantics: pending upload, pending confirmation.
             let upload_state = s.upload_state.unwrap_or("pending");
@@ -962,9 +1078,9 @@ impl QsoRepository for SqliteQsoRepository {
                 INSERT INTO qso_service_state
                     (id, qso_id, service,
                      upload_state, confirmation_state,
-                     uploaded_at, confirmed_at,
+                     uploaded_at, confirmed_at, remote_id,
                      created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 "#,
             )
             .bind(fmt_id(row_id))
@@ -974,11 +1090,84 @@ impl QsoRepository for SqliteQsoRepository {
             .bind(confirmation_state)
             .bind(s.uploaded_at.as_ref().map(fmt_dt))
             .bind(s.confirmed_at.as_ref().map(fmt_dt))
+            .bind(&s.remote_id)
             .bind(&now)
             .bind(&now)
             .execute(&mut *tx)
             .await
             .map_err(map_err)?;
+        }
+
+        if !batch.credits.is_empty() {
+            // One award_definitions row per award name, created on first
+            // sight; the definition itself (rules, units) isn't known
+            // from an ADIF credit list, hence the empty JSON.
+            let mut names: Vec<&str> = batch.credits.iter().map(|c| c.credit.award.as_str()).collect();
+            names.sort_unstable();
+            names.dedup();
+            for name in names {
+                sqlx::query(
+                    r#"
+                    INSERT INTO award_definitions
+                        (id, name, version, definition_json, created_at, updated_at)
+                    VALUES (?, ?, '1', '{}', ?, ?)
+                    ON CONFLICT(name) DO NOTHING
+                    "#,
+                )
+                .bind(fmt_id(Uuid::new_v4()))
+                .bind(name)
+                .bind(&now)
+                .bind(&now)
+                .execute(&mut *tx)
+                .await
+                .map_err(map_err)?;
+            }
+            let award_ids: HashMap<String, String> =
+                sqlx::query("SELECT id, name FROM award_definitions")
+                    .fetch_all(&mut *tx)
+                    .await
+                    .map_err(map_err)?
+                    .iter()
+                    .map(|row| Ok((row.try_get("name")?, row.try_get("id")?)))
+                    .collect::<Result<_, sqlx::Error>>()
+                    .map_err(map_err)?;
+
+            for c in &batch.credits {
+                let import_id = fmt_id(Uuid::new_v4());
+                sqlx::query(
+                    r#"
+                    INSERT INTO award_credit_imports
+                        (id, award_id, call, qso_date, band, mode, unit,
+                         raw_json, imported_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    "#,
+                )
+                .bind(&import_id)
+                .bind(&award_ids[&c.credit.award])
+                .bind(&c.call)
+                .bind(&c.qso_date)
+                .bind(&c.band)
+                .bind(&c.mode)
+                .bind(&c.unit)
+                .bind(credit_raw_json(&c.credit))
+                .bind(&now)
+                .execute(&mut *tx)
+                .await
+                .map_err(map_err)?;
+                sqlx::query(
+                    r#"
+                    INSERT INTO award_credit_links (id, credit_import_id, qso_id, link_status)
+                    VALUES (?, ?, ?, ?)
+                    "#,
+                )
+                .bind(fmt_id(Uuid::new_v4()))
+                .bind(&import_id)
+                .bind(fmt_id(c.qso_id.as_uuid()))
+                .bind(c.credit.status.as_storage_str())
+                .execute(&mut *tx)
+                .await
+                .map_err(map_err)?;
+            }
         }
 
         tx.commit().await.map_err(map_err)?;
@@ -1100,7 +1289,7 @@ mod tests {
             station_callsign: Some(Callsign::parse("W1ABC").unwrap()),
             ..CreateQsoCommand::minimal(
                 Callsign::parse("W1AW").unwrap(),
-                Utc.with_ymd_and_hms(2026, 5, 8, 19, 0, 0).unwrap(),
+                Utc.with_ymd_and_hms(2026, 5, 8, 18, 30, 0).unwrap(),
             )
         };
         let intra_a = CreateQsoCommand {
@@ -1118,7 +1307,7 @@ mod tests {
             station_callsign: Some(Callsign::parse("W1ABC").unwrap()),
             ..CreateQsoCommand::minimal(
                 Callsign::parse("JA1NUT").unwrap(),
-                Utc.with_ymd_and_hms(2026, 5, 8, 20, 0, 0).unwrap(),
+                Utc.with_ymd_and_hms(2026, 5, 8, 19, 30, 0).unwrap(),
             )
         };
         let fresh = CreateQsoCommand {
@@ -1619,6 +1808,30 @@ Japan:                              25:  45:  AS:   36.24: -139.00:    -9.0:  JA
     }
 
     #[tokio::test]
+    async fn import_keeps_a_second_qso_with_the_same_station_on_the_same_day() {
+        let svc = fresh_service().await;
+        // Two sessions of the same contest: same station, band and mode,
+        // two hours apart. Both are real QSOs.
+        let at = |hour| CreateQsoCommand {
+            band: Some(Band::M20),
+            mode: Some(Mode::CW),
+            station_callsign: Some(Callsign::parse("W1ABC").unwrap()),
+            ..CreateQsoCommand::minimal(
+                Callsign::parse("W1AW").unwrap(),
+                Utc.with_ymd_and_hms(2026, 5, 8, hour, 5, 0).unwrap(),
+            )
+        };
+        let report = svc.import_qsos(vec![at(13), at(19)]).await;
+        assert_eq!(report.created, 2);
+        assert_eq!(report.duplicates, 0);
+
+        // Importing the same records again adds nothing.
+        let report = svc.import_qsos(vec![at(13), at(19)]).await;
+        assert_eq!(report.created, 0);
+        assert_eq!(report.duplicates, 2);
+    }
+
+    #[tokio::test]
     async fn import_dedup_does_not_collapse_different_bands() {
         let db = Database::open_in_memory().await.unwrap();
         let repo: Arc<dyn QsoRepository> = Arc::new(SqliteQsoRepository::new(&db));
@@ -1809,5 +2022,411 @@ Japan:                              25:  45:  AS:   36.24: -139.00:    -9.0:  JA
         assert_eq!(results.len(), 1);
         assert!(results[0].dxcc_prefix.is_none());
         assert!(results[0].continent.is_none());
+    }
+
+    // ---- DXKeeper-shaped import: locations, credit, new columns ----
+
+    use crate::station_repo::SqliteStationRepository;
+    use logbook_domain::{ExportOptions, LocationFilter, StationRepository, parse_adif};
+
+    fn f(name: &str, value: &str) -> String {
+        format!("<{name}:{}>{value}", value.len())
+    }
+
+    /// A synthetic ADIF record from station K2A worked on 20m CW.
+    fn rec(call: &str, date: &str, time: &str, extra: &str) -> String {
+        format!(
+            "{}{}{}{}{}{}{}{extra}<EOR>\n",
+            f("CALL", call),
+            f("QSO_DATE", date),
+            f("TIME_ON", time),
+            f("BAND", "20M"),
+            f("MODE", "CW"),
+            f("STATION_CALLSIGN", "K2A"),
+            f("OWNER_CALLSIGN", "K2B"),
+        )
+    }
+
+    async fn import_text(svc: &LogbookService, adif: &str) -> logbook_domain::ImportReport {
+        let outcome = parse_adif(&format!("<EOH>\n{adif}")).unwrap();
+        assert!(outcome.skipped.is_empty(), "{:?}", outcome.skipped);
+        svc.import_qsos(outcome.commands).await
+    }
+
+    async fn count(db: &Database, sql: &str) -> i64 {
+        sqlx::query_scalar(sql).fetch_one(db.pool()).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn import_creates_each_qth_once_reuses_existing_and_leaves_rest_unassigned() {
+        let (svc, db) = fresh_service_with_db().await;
+        let stations = SqliteStationRepository::new(&db);
+        let now = Utc::now();
+        let existing = radio_core::StationLocation {
+            id: StationLocationId::new(),
+            name: "Home".into(),
+            station_callsign: Some(Callsign::parse("W1AW").unwrap()),
+            owner_callsign: None,
+            city: None,
+            county: None,
+            state: None,
+            country: None,
+            grid: Some("FN31".into()),
+            latitude: None,
+            longitude: None,
+            cq_zone: None,
+            itu_zone: None,
+            iota: None,
+            lotw_station_location: None,
+            eqsl_account: None,
+            created_at: now,
+            updated_at: now,
+        };
+        stations.insert_location(&existing).await.unwrap();
+
+        let qth = |n: &str| f("APP_DXKEEPER_MY_QTHID", n);
+        let adif = [
+            rec("W1AW", "20240101", "120000", &qth("Home")),
+            rec("K1ABC", "20240101", "120100", &qth("Portable")),
+            rec("K1ABD", "20240101", "120200", &qth("Portable")),
+            rec("K1ABE", "20240101", "120300", ""),
+        ]
+        .concat();
+        let report = import_text(&svc, &adif).await;
+        assert_eq!(report.created, 4);
+        assert_eq!(report.locations_created, 1);
+
+        let locations = stations.list_locations().await.unwrap();
+        assert_eq!(locations.len(), 2);
+        let portable = locations.iter().find(|l| l.name == "Portable").unwrap();
+        // Callsigns from the first QSO naming it; nothing else invented.
+        assert_eq!(portable.station_callsign.as_ref().unwrap().as_str(), "K2A");
+        assert_eq!(portable.owner_callsign.as_ref().unwrap().as_str(), "K2B");
+        assert_eq!(portable.grid, None);
+
+        let at = |filter| QsoSearch {
+            station_location: filter,
+            ..Default::default()
+        };
+        assert_eq!(svc.count_matching(at(LocationFilter::Is(existing.id))).await.unwrap(), 1);
+        assert_eq!(svc.count_matching(at(LocationFilter::Is(portable.id))).await.unwrap(), 2);
+        let unassigned = svc.search_qsos(at(LocationFilter::Unassigned)).await.unwrap();
+        assert_eq!(unassigned.len(), 1);
+        assert_eq!(unassigned[0].call.as_str(), "K1ABE");
+        assert_eq!(
+            count(&db, "SELECT COUNT(*) FROM qso_exchange_fields WHERE field_name = 'APP_DXKEEPER_MY_QTHID'").await,
+            0
+        );
+
+        // Re-importing the same file creates nothing new.
+        let again = import_text(&svc, &adif).await;
+        assert_eq!((again.created, again.duplicates, again.locations_created), (0, 4, 0));
+    }
+
+    #[tokio::test]
+    async fn my_fields_fill_a_new_location_and_differing_values_stay_with_the_qso() {
+        let (svc, db) = fresh_service_with_db().await;
+        let adif = [
+            rec(
+                "W1AW",
+                "20240101",
+                "120000",
+                &(f("MY_GRIDSQUARE", "FN31pr") + &f("MY_CITY", "Newington")
+                    + &f("MY_CQ_ZONE", "5") + &f("MY_LAT", "N041 42.857")),
+            ),
+            // Same derived name, different grid square on this QSO.
+            rec(
+                "K1ABC",
+                "20240101",
+                "120100",
+                &(f("MY_GRIDSQUARE", "FN31pr") + &f("MY_CITY", "Newington")
+                    + &f("MY_CQ_ZONE", "4")),
+            ),
+        ]
+        .concat();
+        let report = import_text(&svc, &adif).await;
+        assert_eq!((report.created, report.locations_created), (2, 1));
+        let loc = &SqliteStationRepository::new(&db).list_locations().await.unwrap()[0];
+        assert_eq!(loc.name, "Newington FN31pr");
+        assert_eq!(loc.grid.as_deref(), Some("FN31pr"));
+        assert_eq!(loc.city.as_deref(), Some("Newington"));
+        assert_eq!(loc.cq_zone, Some(5));
+        assert!((loc.latitude.unwrap() - 41.71428).abs() < 1e-4);
+        let extras: Vec<(String, String)> = sqlx::query_as(
+            "SELECT field_name, raw_value FROM qso_exchange_fields ORDER BY field_name",
+        )
+        .fetch_all(db.pool())
+        .await
+        .unwrap();
+        assert_eq!(extras, [("MY_CQ_ZONE".to_string(), "4".to_string())]);
+    }
+
+    #[tokio::test]
+    async fn bulk_assign_location_covers_every_match_not_one_page() {
+        let (svc, db) = fresh_service_with_db().await;
+        let adif: String = (0..7)
+            .map(|i| rec(&format!("K1A{}", (b'A' + i) as char), "20240101", "120000", ""))
+            .collect::<Vec<_>>()
+            .concat()
+            + &rec("W1AW", "20240102", "120000", &f("APP_DXKEEPER_MY_QTHID", "Home"));
+        import_text(&svc, &adif).await;
+        let stations = SqliteStationRepository::new(&db);
+        let home = stations.list_locations().await.unwrap().remove(0);
+
+        let unassigned = QsoSearch {
+            station_location: LocationFilter::Unassigned,
+            limit: Some(3),
+            ..Default::default()
+        };
+        assert_eq!(svc.search_qsos(unassigned.clone()).await.unwrap().len(), 3);
+        let report = svc.bulk_assign_location_by_search(unassigned.clone(), home.id).await.unwrap();
+        assert_eq!(report, logbook_domain::BulkReport { matched: 7, succeeded: 7 });
+        assert_eq!(svc.count_matching(unassigned).await.unwrap(), 0);
+        let at_home = QsoSearch {
+            station_location: LocationFilter::Is(home.id),
+            ..Default::default()
+        };
+        assert_eq!(svc.count_matching(at_home).await.unwrap(), 8);
+
+        // Other filters still narrow the assignment.
+        let narrowed = QsoSearch {
+            exact_call: Some(Callsign::parse("W1AW").unwrap()),
+            ..Default::default()
+        };
+        let report = svc.bulk_assign_location_by_search(narrowed, home.id).await.unwrap();
+        assert_eq!(report.matched, 1);
+    }
+
+    #[tokio::test]
+    async fn credits_land_in_award_tables_and_count_as_credited() {
+        let (svc, db) = fresh_service_with_db().await;
+        let adif = [
+            rec(
+                "W1AW",
+                "20240101",
+                "120000",
+                &(f("DXCC", "291") + &f("STATE", "CT") + &f("GRIDSQUARE", "fn31pr")
+                    + &f("CREDIT_GRANTED", "DXCC:LOTW, DXCC_BAND:LOTW, DXCC_MODE:LOTW,WAS")
+                    + &f("CREDIT_SUBMITTED", "VUCC_BAND")),
+            ),
+            rec("VE3XYZ", "20240101", "120100", &(f("DXCC", "1") + &f("CREDIT_GRANTED", "DXCC:CARD"))),
+            rec("JA1ABC", "20240101", "120200", &f("DXCC", "339")),
+        ]
+        .concat();
+        assert_eq!(import_text(&svc, &adif).await.created, 3);
+
+        assert_eq!(count(&db, "SELECT COUNT(*) FROM award_definitions").await, 5);
+        assert_eq!(count(&db, "SELECT COUNT(*) FROM award_credit_imports").await, 6);
+        assert_eq!(count(&db, "SELECT COUNT(*) FROM award_credit_links WHERE link_status = 'granted'").await, 5);
+        assert_eq!(count(&db, "SELECT COUNT(*) FROM award_credit_links WHERE link_status = 'submitted'").await, 1);
+        let units: Vec<(String, String, String, Option<String>)> = sqlx::query_as(
+            "SELECT d.name, i.unit, i.qso_date, i.band FROM award_credit_imports i \
+             JOIN award_definitions d ON d.id = i.award_id WHERE i.call = 'W1AW' ORDER BY d.name",
+        )
+        .fetch_all(db.pool())
+        .await
+        .unwrap();
+        let units: Vec<(&str, &str)> = units.iter().map(|u| (u.0.as_str(), u.1.as_str())).collect();
+        assert_eq!(
+            units,
+            [("DXCC", "291"), ("DXCC_BAND", "291"), ("DXCC_MODE", "291"), ("VUCC_BAND", "FN31"), ("WAS", "CT")]
+        );
+        assert_eq!(
+            count(&db, "SELECT COUNT(*) FROM qso_exchange_fields WHERE field_name LIKE 'CREDIT_%'").await,
+            0
+        );
+
+        let w1aw = svc.search_qsos(QsoSearch {
+            exact_call: Some(Callsign::parse("W1AW").unwrap()),
+            ..Default::default()
+        });
+        let id = w1aw.await.unwrap()[0].id;
+        let detail = svc.get_qso_detail(&id).await.unwrap().unwrap();
+        assert_eq!(detail.credits.len(), 5);
+        assert_eq!(detail.credits[0].award, "DXCC");
+        assert_eq!(detail.credits[0].medium.as_deref(), Some("LOTW"));
+        assert_eq!(detail.credits[3].medium, None);
+        assert_eq!(detail.credits[4].status, CreditStatus::Submitted);
+
+        let award_qsos = svc_repo(&db).list_award_qsos().await.unwrap();
+        let snap = logbook_domain::snapshot(&award_qsos, 2024);
+        assert_eq!(snap.dxcc.worked, 3);
+        assert_eq!(snap.dxcc.confirmed, 0);
+        assert_eq!(snap.dxcc.credited, 2);
+        assert_eq!(snap.dxcc_by_band[&Band::M20].credited, 1);
+        assert_eq!(snap.was.credited, 1);
+    }
+
+    fn svc_repo(db: &Database) -> SqliteQsoRepository {
+        SqliteQsoRepository::new(db)
+    }
+
+    #[tokio::test]
+    async fn qrz_logid_becomes_remote_id_even_without_an_upload_status() {
+        let (svc, db) = fresh_service_with_db().await;
+        let adif = [
+            rec(
+                "W1AW",
+                "20240101",
+                "120000",
+                &(f("QRZCOM_QSO_UPLOAD_STATUS", "Y") + &f("APP_DXKEEPER_QRZCOM_LOGID", "1001")),
+            ),
+            rec(
+                "K1ABC",
+                "20240101",
+                "120100",
+                &(f("QRZCOM_QSO_UPLOAD_STATUS", "M") + &f("APP_DXKEEPER_QRZCOM_LOGID", "1002")),
+            ),
+        ]
+        .concat();
+        import_text(&svc, &adif).await;
+        let rows: Vec<(String, String)> = sqlx::query_as(
+            "SELECT remote_id, upload_state FROM qso_service_state WHERE service = 'qrz' ORDER BY remote_id",
+        )
+        .fetch_all(db.pool())
+        .await
+        .unwrap();
+        assert_eq!(
+            rows,
+            [("1001".into(), "uploaded".into()), ("1002".into(), "pending".into())]
+        );
+        // `M` still means "upload again".
+        let pending = svc_repo(&db).list_pending_uploads("qrz", None).await.unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].call.as_str(), "K1ABC");
+    }
+
+    /// Everything a QSO carries, minus what is assigned per database
+    /// (ids, timestamps) — for comparing two imports of the same data.
+    fn fingerprint(q: &Qso, locations: &[radio_core::StationLocation]) -> String {
+        let loc = q
+            .station_location_id
+            .map(|id| locations.iter().find(|l| l.id == id).unwrap())
+            .map(|l| (&l.name, &l.grid, &l.city, l.cq_zone, &l.station_callsign));
+        let q = Qso {
+            id: QsoId::from_uuid(Uuid::nil()),
+            station_location_id: None,
+            created_at: q.qso_begin,
+            updated_at: q.qso_begin,
+            ..q.clone()
+        };
+        format!("{q:?} {loc:?}")
+    }
+
+    #[tokio::test]
+    async fn export_then_import_into_an_empty_log_reproduces_columns_locations_and_credit() {
+        let (svc, db) = fresh_service_with_db().await;
+        let full = [
+            ("FREQ", "14.025500"),
+            ("FREQ_RX", "14.027000"),
+            ("BAND_RX", "20M"),
+            ("TIME_OFF", "000130"),
+            ("RST_SENT", "599"),
+            ("RST_RCVD", "579"),
+            ("OPERATOR", "K1ABC"),
+            ("DXCC", "291"),
+            ("APP_DXKEEPER_DXCCPREFIX", "K"),
+            ("PFX", "W1"),
+            ("CONT", "NA"),
+            ("CQZ", "5"),
+            ("ITUZ", "8"),
+            ("GRIDSQUARE", "FN31pr"),
+            ("STATE", "CT"),
+            ("CNTY", "CT,Hartford"),
+            ("LAT", "N041 42.857"),
+            ("LON", "W072 43.698"),
+            ("NAME", "Art"),
+            ("QTH", "Newington"),
+            ("ADDRESS", "1 Main St\r\nNewington CT"),
+            ("EMAIL", "art@example.com"),
+            ("AGE", "42"),
+            ("QSL_VIA", "W1AW"),
+            ("COMMENT", "synthetic"),
+            ("CONTEST_ID", "cwt"),
+            ("STX", "17"),
+            ("SRX", "1234"),
+            ("STX_STRING", "CHAD 1"),
+            ("SRX_STRING", "ART CT"),
+            ("ARRL_SECT", "CT"),
+            ("TX_PWR", "100"),
+            ("RX_PWR", "0"),
+            ("DISTANCE", "1234.5"),
+            ("ANT_AZ", "87"),
+            ("SFI", "150"),
+            ("A_INDEX", "7"),
+            ("K_INDEX", "2"),
+            ("CREDIT_GRANTED", "DXCC:LOTW, DXCC_BAND:LOTW,WAS"),
+            ("CREDIT_SUBMITTED", "VUCC_BAND"),
+            ("APP_DXKEEPER_MY_QTHID", "Home"),
+            ("MY_GRIDSQUARE", "FN31pr"),
+            ("MY_CQ_ZONE", "5"),
+            ("LOTW_QSL_SENT", "Y"),
+            ("QSL_SENT", "N"),
+            ("APP_DXKEEPER_QRZCOM_LOGID", "1001"),
+        ]
+        .iter()
+        .map(|(n, v)| f(n, v))
+        .collect::<String>();
+        let adif = [
+            rec("W1AW", "20240101", "235930", &full),
+            rec("K1ABE", "20240102", "120000", &f("STX", "5NN")),
+        ]
+        .concat();
+        assert_eq!(import_text(&svc, &adif).await.created, 2);
+
+        let stations = SqliteStationRepository::new(&db);
+        let locations = stations.list_locations().await.unwrap();
+        let exported = svc
+            .export_adif_by_search(QsoSearch::default(), &locations, &ExportOptions::default())
+            .await
+            .unwrap();
+
+        let (svc2, db2) = fresh_service_with_db().await;
+        let outcome = parse_adif(&exported).unwrap();
+        assert!(outcome.skipped.is_empty());
+        assert_eq!(svc2.import_qsos(outcome.commands).await.created, 2);
+        let locations2 = SqliteStationRepository::new(&db2).list_locations().await.unwrap();
+        assert_eq!(locations2.len(), 1);
+
+        let mut before: Vec<String> = svc
+            .search_full_qsos(QsoSearch::default())
+            .await
+            .unwrap()
+            .iter()
+            .map(|q| fingerprint(q, &locations))
+            .collect();
+        let mut after: Vec<String> = svc2
+            .search_full_qsos(QsoSearch::default())
+            .await
+            .unwrap()
+            .iter()
+            .map(|q| fingerprint(q, &locations2))
+            .collect();
+        before.sort();
+        after.sort();
+        assert_eq!(before, after);
+
+        // Credit, extra fields and service state rebuilt identically.
+        for sql in [
+            "SELECT d.name || ':' || COALESCE(json_extract(i.raw_json, '$.medium'), '') || ':' \
+             || l.link_status || ':' || i.unit FROM award_credit_links l \
+             JOIN award_credit_imports i ON i.id = l.credit_import_id \
+             JOIN award_definitions d ON d.id = i.award_id ORDER BY 1",
+            "SELECT field_name || '=' || raw_value FROM qso_exchange_fields ORDER BY 1",
+            "SELECT service || ':' || upload_state || ':' || COALESCE(remote_id, '') \
+             FROM qso_service_state ORDER BY 1",
+        ] {
+            let a: Vec<String> = sqlx::query_scalar(sql).fetch_all(db.pool()).await.unwrap();
+            let b: Vec<String> = sqlx::query_scalar(sql).fetch_all(db2.pool()).await.unwrap();
+            assert!(!a.is_empty(), "{sql}");
+            assert_eq!(a, b, "{sql}");
+        }
+        let extras: Vec<String> = sqlx::query_scalar(
+            "SELECT field_name FROM qso_exchange_fields ORDER BY 1",
+        )
+        .fetch_all(db.pool())
+        .await
+        .unwrap();
+        assert_eq!(extras, ["APP_DXKEEPER_QRZCOM_LOGID", "LOTW_QSL_SENT", "QSL_SENT", "STX"]);
     }
 }

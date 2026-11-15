@@ -1,5 +1,5 @@
 //! Awards Detail drawer. Pick an award (DXCC / WAS / WPX / IOTA /
-//! Marathon), see the per-unit worked/confirmed grid, optionally filter
+//! Marathon), see the per-unit worked/confirmed/credited grid, optionally filter
 //! DXCC by band, and target an unworked unit so the live Spots pane
 //! highlights matching spots.
 
@@ -83,41 +83,22 @@ impl App {
         let state = &self.awards_drawer;
         let snap = &self.awards;
 
-        // Total / confirmed for the selected award. Read from the
-        // pre-computed snapshot so this drawer doesn't re-run any
-        // backend queries.
-        let (worked_total, confirmed_total, units, by_band_supported) = match state.selected_kind.0 {
-            AwardKind::Dxcc => (
-                snap.dxcc.worked,
-                snap.dxcc.confirmed,
-                snap.dxcc.units.clone(),
-                true,
-            ),
-            AwardKind::Was => (
-                snap.was.worked,
-                snap.was.confirmed,
-                snap.was.units.clone(),
-                false,
-            ),
-            AwardKind::Wpx => (
-                snap.wpx.worked,
-                snap.wpx.confirmed,
-                snap.wpx.units.clone(),
-                false,
-            ),
-            AwardKind::Iota => (
-                snap.iota.worked,
-                snap.iota.confirmed,
-                snap.iota.units.clone(),
-                false,
-            ),
-            AwardKind::Marathon => (
-                snap.marathon.entities.worked,
-                snap.marathon.entities.confirmed,
-                snap.marathon.entities.units.clone(),
-                false,
-            ),
+        // Worked / confirmed / credited totals for the selected award.
+        // Read from the pre-computed snapshot so this drawer doesn't
+        // re-run any backend queries.
+        let (progress, by_band_supported) = match state.selected_kind.0 {
+            AwardKind::Dxcc => (&snap.dxcc, true),
+            AwardKind::Was => (&snap.was, false),
+            AwardKind::Wpx => (&snap.wpx, false),
+            AwardKind::Iota => (&snap.iota, false),
+            AwardKind::Marathon => (&snap.marathon.entities, false),
         };
+        let (worked_total, confirmed_total, credited_total, units) = (
+            progress.worked,
+            progress.confirmed,
+            progress.credited,
+            progress.units.clone(),
+        );
 
         // For DXCC, optionally narrow units to a specific band by
         // pulling that band's AwardProgress out of `dxcc_by_band`.
@@ -129,13 +110,14 @@ impl App {
                 Some(prog) => (
                     prog.units.clone(),
                     format!(
-                        " · {} band: {}/{}",
+                        " · {} band: {}/{}/{}",
                         b.as_adif(),
                         prog.worked,
-                        prog.confirmed
+                        prog.confirmed,
+                        prog.credited
                     ),
                 ),
-                None => (Vec::new(), format!(" · {} band: 0/0", b.as_adif())),
+                None => (Vec::new(), format!(" · {} band: 0/0/0", b.as_adif())),
             },
             _ => (units, String::new()),
         };
@@ -170,8 +152,8 @@ impl App {
         };
 
         let totals_line = text(format!(
-            "{}: {} worked, {} confirmed{}",
-            state.selected_kind.0, worked_total, confirmed_total, scope_label
+            "{}: {} worked, {} confirmed, {} credited{}",
+            state.selected_kind.0, worked_total, confirmed_total, credited_total, scope_label
         ))
         .size(13);
 
@@ -197,7 +179,8 @@ impl App {
         let mut list = column![row![
             text("Key").width(Length::Fixed(80.0)),
             text("Worked").width(Length::Fixed(70.0)),
-            text("Confirmed").width(Length::Fill),
+            text("Confirmed").width(Length::Fixed(80.0)),
+            text("Credited").width(Length::Fill),
         ]
         .spacing(4)]
         .spacing(2);
@@ -209,10 +192,11 @@ impl App {
                 Some(t) if t.kind == kind && t.key == key
             );
             let label = format!(
-                "{:<6}  {:<5}  {}",
+                "{:<6}  {:<5}  {:<9}  {}",
                 unit.key,
                 unit.worked_count,
-                if unit.confirmed { "yes" } else { "no" }
+                if unit.confirmed { "yes" } else { "no" },
+                if unit.credited { "yes" } else { "no" }
             );
             let target_unit = TargetUnit {
                 kind,

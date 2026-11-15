@@ -1,7 +1,9 @@
 pub mod awards;
 pub mod commands;
+pub mod credit;
 pub mod export;
 pub mod import;
+pub mod my_station;
 pub mod queries;
 pub mod repository;
 pub mod service;
@@ -11,11 +13,13 @@ pub use awards::{
     marathon_progress, snapshot, was_progress, wpx_progress,
 };
 pub use commands::CreateQsoCommand;
-pub use export::{ExportOptions, export_adif, export_adif_default};
+pub use credit::{AwardCredit, CreditStatus};
+pub use export::{ExportOptions, ExportRecord, export_adif, export_adif_default, export_adif_records};
 pub use import::{ImportError, ImportOutcome, SkippedRecord, parse_adif};
-pub use queries::{QsoSearch, QsoSummary, SortOrder};
+pub use my_station::StationLocationRef;
+pub use queries::{LocationFilter, QsoSearch, QsoSummary, SortOrder};
 pub use repository::{
-    AwardQso, DedupKey, ImportedServiceState, QsoDetail, QsoRepository, QsoServiceState,
-    RepoResult, RepositoryError, StationRepository,
+    AwardQso, DedupKey, ImportBatch, ImportedCredit, ImportedServiceState, QsoDetail,
+    QsoRepository, QsoServiceState, RepoResult, RepositoryError, StationRepository,
 };
 pub use service::{BulkReport, ImportReport, LogbookService};

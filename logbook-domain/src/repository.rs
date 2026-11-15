@@ -6,11 +6,13 @@ use radio_core::{
     Band, Callsign, Mode, Qso, QsoExchangeField, QsoId, StationLocation, StationLocationId,
 };
 
+use crate::credit::AwardCredit;
 use crate::queries::{QsoSearch, QsoSummary};
 
 /// Slim per-QSO snapshot for award computation. Pulled in one query that
-/// joins qsos with qso_service_state.lotw so the awards module can compute
-/// worked + confirmed counts without further DB hits.
+/// joins qsos with qso_service_state.lotw (and the QSO's granted award
+/// credits) so the awards module can compute worked / confirmed /
+/// credited counts without further DB hits.
 #[derive(Debug, Clone)]
 pub struct AwardQso {
     pub id: QsoId,
@@ -24,6 +26,15 @@ pub struct AwardQso {
     pub state: Option<String>,
     pub iota: Option<String>,
     pub lotw_confirmed: bool,
+    /// Names of the awards this QSO has granted credit for (`DXCC`,
+    /// `DXCC_BAND`, `WAS`, …). Submitted-only credit is not included.
+    pub granted_credits: Vec<String>,
+}
+
+impl AwardQso {
+    pub fn has_granted_credit(&self, award: &str) -> bool {
+        self.granted_credits.iter().any(|a| a == award)
+    }
 }
 
 /// QSO upload lifecycle for a remote service:
@@ -88,13 +99,14 @@ pub struct QsoServiceState {
 }
 
 /// Everything stored about one QSO: the record itself, the extra fields
-/// kept alongside it (contest exchanges, ADIF fields with no column of
-/// their own), and where it stands with each QSL service.
+/// kept alongside it (ADIF fields with no column of their own), where it
+/// stands with each QSL service, and the award credit it carries.
 #[derive(Debug, Clone)]
 pub struct QsoDetail {
     pub qso: Qso,
     pub exchange_fields: Vec<QsoExchangeField>,
     pub service_states: Vec<QsoServiceState>,
+    pub credits: Vec<AwardCredit>,
 }
 
 #[derive(Debug, Clone)]
@@ -123,9 +135,9 @@ pub enum RepositoryError {
 
 pub type RepoResult<T> = Result<T, RepositoryError>;
 
-/// Canonical dedup key for a QSO during ADIF import — matches the keys
-/// used by `is_duplicate` in `LogbookService`. Tuple of
-/// (station_callsign, worked_call, yyyy-mm-dd, band, mode). The
+/// Canonical dedup key for a QSO during ADIF import. Tuple of
+/// (station_callsign, worked_call, start time as `yyyy-mm-ddThh:mm:ss`,
+/// band, mode). The
 /// preloaded `HashSet<DedupKey>` lets `import_qsos` skip per-record
 /// SELECTs against the growing `qsos` table.
 pub type DedupKey = (
@@ -151,6 +163,40 @@ pub struct ImportedServiceState {
     pub confirmation_state: Option<&'static str>,
     pub uploaded_at: Option<DateTime<Utc>>,
     pub confirmed_at: Option<DateTime<Utc>>,
+    /// The service's id for the QSO, e.g. DXKeeper's
+    /// `APP_DXKEEPER_QRZCOM_LOGID` for QRZ.
+    pub remote_id: Option<String>,
+}
+
+/// One award credit to store at import: an `award_credit_imports` row
+/// (the credit as the sponsor sees it — call, date, band, mode, unit)
+/// linked to the QSO it came from by an `award_credit_links` row.
+#[derive(Debug, Clone)]
+pub struct ImportedCredit {
+    pub qso_id: QsoId,
+    pub credit: AwardCredit,
+    pub call: String,
+    /// UTC date of the QSO, `YYYY-MM-DD`.
+    pub qso_date: String,
+    pub band: Option<String>,
+    pub mode: Option<String>,
+    /// What the credit counts towards within the award: the DXCC entity
+    /// id for the DXCC family, the state for WAS, the grid square for
+    /// VUCC; empty when slogger doesn't know the award's unit.
+    pub unit: String,
+}
+
+/// Everything one ADIF import writes, committed together by
+/// `QsoRepository::insert_qsos_batch`.
+#[derive(Debug, Clone, Default)]
+pub struct ImportBatch {
+    /// Station locations first seen in this import. Inserted before the
+    /// QSOs that link to them.
+    pub locations: Vec<StationLocation>,
+    pub qsos: Vec<Qso>,
+    pub exchange_fields: Vec<(QsoId, QsoExchangeField)>,
+    pub service_states: Vec<ImportedServiceState>,
+    pub credits: Vec<ImportedCredit>,
 }
 
 #[async_trait]
@@ -177,6 +223,10 @@ pub trait QsoRepository: std::fmt::Debug + Send + Sync {
     /// Upload / confirmation records for one QSO, ordered by service.
     async fn list_service_states(&self, qso_id: &QsoId) -> RepoResult<Vec<QsoServiceState>>;
 
+    /// Award credit linked to one QSO, granted before submitted, then by
+    /// award name.
+    async fn list_credits(&self, qso_id: &QsoId) -> RepoResult<Vec<AwardCredit>>;
+
     async fn search_qsos(&self, query: QsoSearch) -> RepoResult<Vec<QsoSummary>>;
 
     /// Same filter shape as `search_qsos` but returns full `Qso` records.
@@ -186,6 +236,15 @@ pub trait QsoRepository: std::fmt::Debug + Send + Sync {
     /// Count QSOs matching the filter without fetching them. Used for
     /// "Delete N QSOs?" confirmations and result-set previews.
     async fn count_matching(&self, query: QsoSearch) -> RepoResult<usize>;
+
+    /// Point every QSO matching `query` at `location` in one statement.
+    /// Ignores the query's sort and limit: it applies to all matches, not
+    /// one page of them. Returns the number of QSOs changed.
+    async fn assign_station_location(
+        &self,
+        query: QsoSearch,
+        location: StationLocationId,
+    ) -> RepoResult<usize>;
 
     /// Returns QSOs that have not yet been uploaded to the named service.
     /// "Not yet uploaded" = no row in qso_service_state for (qso_id, service)
@@ -260,17 +319,20 @@ pub trait QsoRepository: std::fmt::Debug + Send + Sync {
     /// (matching `is_duplicate` semantics) are returned.
     async fn load_dedup_keys(&self) -> RepoResult<std::collections::HashSet<DedupKey>>;
 
-    /// Batch insert path used by ADIF import. Wraps all three tables
-    /// (qsos, qso_exchange_fields, qso_service_state) in a single
-    /// transaction so a 50k-record import is one fsync instead of
-    /// ~1.5M. Per-row INSERT bodies match the existing single-row
-    /// methods; only the transaction wrapping differs.
-    async fn insert_qsos_batch(
-        &self,
-        qsos: &[Qso],
-        exchange_fields: &[(QsoId, QsoExchangeField)],
-        service_states: &[ImportedServiceState],
-    ) -> RepoResult<()>;
+    /// Every station location, oldest first — what `import_qsos` matches
+    /// an imported record's QTH name against. The same rows as
+    /// `StationRepository::list_locations`; here so the import, which
+    /// only holds this repository, can resolve names up front (one query,
+    /// like `load_dedup_keys`) and write new locations in its batch.
+    async fn load_station_locations(&self) -> RepoResult<Vec<StationLocation>>;
+
+    /// Batch insert path used by ADIF import. Writes every table in the
+    /// batch (station_locations, qsos, qso_exchange_fields,
+    /// qso_service_state, award credit) in a single transaction so a
+    /// 50k-record import is one fsync instead of ~1.5M. Per-row INSERT
+    /// bodies match the existing single-row methods; only the
+    /// transaction wrapping differs.
+    async fn insert_qsos_batch(&self, batch: &ImportBatch) -> RepoResult<()>;
 }
 
 #[async_trait]

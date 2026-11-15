@@ -340,6 +340,7 @@ fn load_resolver(dir: &std::path::Path) -> Arc<dyn Resolver> {
 
 pub(super) async fn refresh(
     repo: Arc<dyn QsoRepository>,
+    station_repo: Arc<dyn StationRepository>,
     svc: Arc<LogbookService>,
 ) -> Result<RefreshSnapshot, String> {
     let recent = svc
@@ -375,6 +376,10 @@ pub(super) async fn refresh(
         .map_err(|e| e.to_string())?;
     let year = Utc::now().year();
     let awards = awards_snapshot(&award_qsos, year);
+    let station_locations = station_repo
+        .list_locations()
+        .await
+        .map_err(|e| e.to_string())?;
     Ok(RefreshSnapshot {
         recent,
         pending_lotw: pending_lotw.len(),
@@ -383,6 +388,7 @@ pub(super) async fn refresh(
         pending_qrz: pending_qrz.len(),
         pending_hrdlog: pending_hrdlog.len(),
         awards,
+        station_locations,
     })
 }
 
@@ -413,6 +419,8 @@ pub(super) async fn import_adif_file(
     let report: ImportReport = svc.import_qsos(outcome.commands).await;
     Ok(ImportSummary {
         created: report.created,
+        duplicates: report.duplicates,
+        locations_created: report.locations_created,
         skipped: report.skipped,
         parse_errors,
         first_errors: report.errors.into_iter().take(3).collect(),

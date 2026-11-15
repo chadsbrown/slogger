@@ -5,7 +5,7 @@ use spot_feed::SpotEvent;
 use wsjtx_bridge::WsjtxMessage;
 
 use super::drawers::awards::{AwardKind, TargetUnit};
-use super::drawers::logbook::{BandFilter, LotwFilter, ModeFilter};
+use super::drawers::logbook::{BandFilter, LocationFilterOpt, LotwFilter, ModeFilter};
 use super::panels::{DragMode, PanelKind};
 use super::types::{BootBundle, StationOption, TaggedRigSnapshot};
 use super::views::ViewKind;
@@ -107,6 +107,11 @@ pub enum Message {
     LogbookBandChanged(BandFilter),
     LogbookModeChanged(ModeFilter),
     LogbookLotwFilterChanged(LotwFilter),
+    LogbookLocationFilterChanged(LocationFilterOpt),
+    /// Location picked for "assign to all matches".
+    LogbookAssignTargetChanged(StationOption),
+    /// Link every QSO the last search matched to the picked location.
+    LogbookBulkAssignLocation,
     LogbookSearchPressed,
     LogbookSearchFinished {
         generation: u64,
@@ -198,11 +203,15 @@ pub struct RefreshSnapshot {
     pub pending_qrz: usize,
     pub pending_hrdlog: usize,
     pub awards: AwardsSnapshot,
+    /// Re-read each refresh: an import can create locations.
+    pub station_locations: Vec<StationLocation>,
 }
 
 #[derive(Debug, Clone)]
 pub struct ImportSummary {
     pub created: usize,
+    pub duplicates: usize,
+    pub locations_created: usize,
     pub skipped: usize,
     pub parse_errors: usize,
     pub first_errors: Vec<String>,

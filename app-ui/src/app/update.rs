@@ -72,7 +72,10 @@ impl App {
                 // Land with the cursor in the Call field: the operator can
                 // start typing the moment the window appears.
                 Task::batch([
-                    Task::perform(refresh(bundle.repo, bundle.service), Message::Refreshed),
+                    Task::perform(
+                        refresh(bundle.repo, bundle.station_repo, bundle.service),
+                        Message::Refreshed,
+                    ),
                     focus_call(),
                 ])
             }
@@ -189,12 +192,22 @@ impl App {
                     return Task::none();
                 };
                 tracing::info!(instance = %id, "wsjtx logged a qso; importing");
+                // A QSO made right now was made from the active station
+                // location, the same as one typed into the entry form.
+                // Without this the import would invent a location from
+                // the record's MY_GRIDSQUARE.
+                let location = self.active_location.as_ref().map(|l| l.id);
                 Task::perform(
                     async move {
-                        let outcome = match logbook_domain::parse_adif(&adif) {
+                        let mut outcome = match logbook_domain::parse_adif(&adif) {
                             Ok(o) => o,
                             Err(e) => return Err(e.to_string()),
                         };
+                        if location.is_some() {
+                            for cmd in &mut outcome.commands {
+                                cmd.station_location_id = location;
+                            }
+                        }
                         let report = svc.import_qsos(outcome.commands).await;
                         Ok(report.created)
                     },
@@ -318,6 +331,7 @@ impl App {
                 self.pending_hrdlog = snap.pending_hrdlog;
                 self.worked_by_band = build_worked_by_band(&snap.awards);
                 self.awards = snap.awards;
+                self.station_locations = snap.station_locations;
                 Task::none()
             }
             Message::Refreshed(Err(e)) => {
@@ -344,9 +358,15 @@ impl App {
             Message::ImportFinished(Ok(summary)) => {
                 self.importing = false;
                 let mut msg = format!(
-                    "import: created {} / skipped {} / parse-errors {}",
-                    summary.created, summary.skipped, summary.parse_errors
+                    "import: created {} / duplicates {} / skipped {} / parse-errors {}",
+                    summary.created, summary.duplicates, summary.skipped, summary.parse_errors
                 );
+                if summary.locations_created > 0 {
+                    msg.push_str(&format!(
+                        " / new station locations {}",
+                        summary.locations_created
+                    ));
+                }
                 if let Some(first) = summary.first_errors.first() {
                     msg.push_str(&format!(" — first: {first}"));
                 }
@@ -503,6 +523,15 @@ impl App {
                 self.logbook_search.lotw_filter = lf;
                 Task::none()
             }
+            Message::LogbookLocationFilterChanged(opt) => {
+                self.logbook_search.location_filter = opt;
+                Task::none()
+            }
+            Message::LogbookAssignTargetChanged(opt) => {
+                self.logbook_search.assign_target = Some(opt);
+                Task::none()
+            }
+            Message::LogbookBulkAssignLocation => self.run_logbook_bulk_assign_location(),
             Message::LogbookSearchPressed => self.run_logbook_search(),
             Message::LogbookSearchFinished { generation, result } => {
                 if generation != self.logbook_search.generation {
@@ -905,6 +934,7 @@ impl App {
             self.logbook_search.generation.wrapping_add(1);
         let generation = self.logbook_search.generation;
         let search = self.build_logbook_search();
+        self.logbook_search.last_search = Some(search.clone());
         self.logbook_search.searching = true;
         Task::perform(
             async move {
@@ -935,6 +965,32 @@ impl App {
             async move {
                 let deleted = svc.bulk_soft_delete(&ids).await;
                 Ok(format!("deleted {deleted} / {attempted} QSOs"))
+            },
+            move |result| Message::LogbookBulkFinished { generation, result },
+        )
+    }
+
+    /// Link every QSO the last search matched — the whole result, not
+    /// the page shown or the rows selected — to the chosen location.
+    fn run_logbook_bulk_assign_location(&mut self) -> Task<Message> {
+        let (Some(svc), Some(search), Some(target)) = (
+            self.service.clone(),
+            self.logbook_search.last_search.clone(),
+            self.logbook_search.assign_target.clone(),
+        ) else {
+            return Task::none();
+        };
+        let generation = self.logbook_search.generation;
+        Task::perform(
+            async move {
+                let report = svc
+                    .bulk_assign_location_by_search(search, target.id)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                Ok(format!(
+                    "assigned {} / {} QSOs to {}",
+                    report.succeeded, report.matched, target.label
+                ))
             },
             move |result| Message::LogbookBulkFinished { generation, result },
         )
@@ -984,6 +1040,7 @@ impl App {
             band: state.band.0,
             mode: state.mode.0.clone(),
             lotw_confirmed: state.lotw_filter.as_search_filter(),
+            station_location: state.location_filter.filter,
             limit: Some(500),
             ..Default::default()
         }
@@ -1074,8 +1131,10 @@ impl App {
     }
 
     pub(super) fn refresh_task(&self) -> Task<Message> {
-        match (self.repo.clone(), self.service.clone()) {
-            (Some(repo), Some(svc)) => Task::perform(refresh(repo, svc), Message::Refreshed),
+        match (self.repo.clone(), self.station_repo.clone(), self.service.clone()) {
+            (Some(repo), Some(stations), Some(svc)) => {
+                Task::perform(refresh(repo, stations, svc), Message::Refreshed)
+            }
             _ => Task::none(),
         }
     }
@@ -1129,7 +1188,34 @@ impl App {
         // Editing path: route through update_qso, preserving the original
         // qso_begin so we don't accidentally re-time the contact.
         if let Some(id) = self.editing_qso {
-            let mut edit_cmd = cmd;
+            // update_qso replaces the whole record, and the form only
+            // edits a few fields. Start from the stored QSO so everything
+            // else (imported name, contest exchange, station location, …)
+            // survives the edit; the form's fields go on top.
+            let mut edit_cmd = match self.qso_detail.as_ref().filter(|d| d.qso.id == id) {
+                Some(detail) => CreateQsoCommand {
+                    call: cmd.call,
+                    band: cmd.band,
+                    freq_hz: cmd.freq_hz,
+                    mode: cmd.mode,
+                    rst_sent: cmd.rst_sent,
+                    rst_rcvd: cmd.rst_rcvd,
+                    ..CreateQsoCommand::from_qso(&detail.qso)
+                },
+                None => cmd,
+            };
+            // A corrected call is a different station: drop the entity
+            // details the old call had so the resolver derives new ones.
+            if let Some(detail) = self.qso_detail.as_ref().filter(|d| d.qso.id == id) {
+                if detail.qso.call != edit_cmd.call {
+                    edit_cmd.dxcc_id = None;
+                    edit_cmd.dxcc_prefix = None;
+                    edit_cmd.wpx_prefix = None;
+                    edit_cmd.continent = None;
+                    edit_cmd.cq_zone = None;
+                    edit_cmd.itu_zone = None;
+                }
+            }
             // For edits, keep original qso_begin from the form's bound
             // record. submit_qso doesn't currently surface that — we
             // approximate by reusing the loaded value via Utc::now() as

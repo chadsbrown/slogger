@@ -9,7 +9,7 @@ pub struct QsoSearch {
     pub band: Option<Band>,
     pub mode: Option<Mode>,
     pub dxcc_id: Option<u16>,
-    pub station_location_id: Option<StationLocationId>,
+    pub station_location: LocationFilter,
     pub from: Option<DateTime<Utc>>,
     pub to: Option<DateTime<Utc>>,
     /// US state filter (case-sensitive on stored value, typically 2-letter).
@@ -26,6 +26,17 @@ pub struct QsoSearch {
     /// `QsoBeginDesc` — most-recent QSOs first.
     pub sort: SortOrder,
     pub limit: Option<u32>,
+}
+
+/// Which station location a QSO must be linked to. `Unassigned` finds the
+/// QSOs import could not place (no QTH named in the file) so the operator
+/// can assign them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LocationFilter {
+    #[default]
+    Any,
+    Unassigned,
+    Is(StationLocationId),
 }
 
 /// Result ordering for `search_qsos` / `search_full_qsos` /
