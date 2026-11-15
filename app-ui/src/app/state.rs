@@ -159,6 +159,9 @@ pub struct App {
     /// (instead of dropped into self.status) so the QSL view's Service
     /// status pane can render last-update detail per service.
     pub(super) last_services_update: Option<MultiUpdateSummary>,
+    /// Result of the last Full LoTW resync this session, in full. The
+    /// status bar clips long messages, so the QSL tab shows this whole.
+    pub(super) last_lotw_resync: Option<String>,
 
     /// QSL view state — service filter for the Pending pane, the
     /// current pending QSOs list, per-row selection, and last action
@@ -231,6 +234,7 @@ impl App {
             ),
             qsl_panes: pane_grid::State::with_configuration(default_qsl_configuration()),
             last_services_update: None,
+            last_lotw_resync: None,
             qsl_view: QslViewState::default(),
         };
         (app, Task::perform(boot_app(), Message::Booted))

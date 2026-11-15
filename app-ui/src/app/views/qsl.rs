@@ -202,9 +202,12 @@ fn view_services_pane(app: &App) -> Element<'_, Message> {
         .style(button::secondary)
         .on_press_maybe((!app.syncing).then_some(Message::LotwFullResyncPressed));
 
-    column![col, row![update_btn, resync_btn].spacing(8)]
-        .spacing(8)
-        .into()
+    let mut out = column![col, row![update_btn, resync_btn].spacing(8)].spacing(8);
+    if let Some(result) = &app.last_lotw_resync {
+        // Wraps, unlike the status bar, so nothing is cut off.
+        out = out.push(text(format!("Last full resync — {result}")).size(12));
+    }
+    out.into()
 }
 
 fn pending_count_for(app: &App, svc: QslService) -> usize {

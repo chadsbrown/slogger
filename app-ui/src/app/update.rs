@@ -395,10 +395,15 @@ impl App {
             Message::LotwFullResyncPressed => self.start_lotw_full_resync(),
             Message::LotwFullResyncFinished(result) => {
                 self.syncing = false;
-                self.status = Some(match &result {
+                let message = match &result {
                     Ok(f) => format!("LoTW: {}", format_lotw_fetch(f)),
                     Err(e) => format!("LoTW full resync failed: {e}"),
-                });
+                };
+                // The status bar clips; keep the whole result where it
+                // can be read (QSL tab) and in the log.
+                tracing::info!("{message}");
+                self.last_lotw_resync = Some(message.clone());
+                self.status = Some(message);
                 // The QSL view's LoTW row shows the latest sync; the
                 // upload part of the last update still stands.
                 if let Some(lotw) = self

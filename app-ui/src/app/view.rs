@@ -1,7 +1,7 @@
 //! Application shell: the tab bar, the selected view's body, and the
 //! persistent bottom status bar. Per-view content lives in `views/`.
 
-use iced::widget::{button, column, container, pick_list, row, text};
+use iced::widget::{button, column, container, pick_list, row, text, tooltip};
 use iced::{Element, Length};
 
 use super::message::Message;
@@ -105,14 +105,27 @@ impl App {
                 .align_y(iced::Alignment::Center),
             );
         }
-        let left = left.push(
-            container(
-                text(self.status.as_deref().unwrap_or(""))
-                    .size(13)
-                    .wrapping(text::Wrapping::None),
-            )
+        // One line, clipped when it runs into the clock; hovering shows
+        // the whole message.
+        let message = self.status.as_deref().unwrap_or("");
+        let clipped = container(text(message).size(13).wrapping(text::Wrapping::None))
             .width(Length::Fill)
-            .clip(true),
+            .clip(true);
+        let status_text: Element<'_, Message> = if message.is_empty() {
+            clipped.into()
+        } else {
+            tooltip(
+                clipped,
+                container(text(message).size(13))
+                    .padding(8)
+                    .max_width(700)
+                    .style(theme::panel_style),
+                tooltip::Position::Top,
+            )
+            .into()
+        };
+        let left = left.push(
+            status_text,
         );
 
         let clock = row![
