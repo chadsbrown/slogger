@@ -1,5 +1,6 @@
 //! Theme picker: a grid of tiles, each drawn in its own theme's colours
-//! so it previews what choosing it would look like. Picking a tile
+//! (with a sample table row) so it previews what choosing it would look
+//! like. Picking a tile
 //! applies the theme immediately and leaves the modal open, so several
 //! can be tried in a row. Tiles are grouped by where the theme comes from.
 
@@ -60,7 +61,7 @@ fn tile(theme: &Theme, is_current: bool) -> Element<'static, Message> {
     let palette = theme.extended_palette();
     let background = palette.background.base.color;
     let name_color = palette.background.base.text;
-    let muted = Color { a: 0.5, ..name_color };
+    let hues = style::hues(theme);
 
     let name_row = row![
         text(theme.to_string())
@@ -73,26 +74,37 @@ fn tile(theme: &Theme, is_current: bool) -> Element<'static, Message> {
     ]
     .align_y(iced::Alignment::Center);
 
+    // A table row as this theme would draw it.
+    let sample = |s: &'static str, color: Color| {
+        text(s)
+            .size(style::LABEL_TEXT)
+            .font(style::MONO)
+            .color(color)
+            .wrapping(text::Wrapping::None)
+    };
+    let sample_row = row![
+        sample("18:42", hues.muted),
+        sample("W1AW", hues.call),
+        sample("14074.0", hues.freq),
+        sample("20M", hues.band),
+        sample("FT8", hues.mode),
+    ]
+    .spacing(7);
+
     let swatches = row![
         swatch(palette.primary.base.color),
         swatch(palette.success.base.color),
         swatch(palette.warning.base.color),
         swatch(palette.danger.base.color),
         Space::new().width(Length::Fill),
-        // A stand-in for a line of muted text.
-        container(Space::new().width(28).height(4)).style(move |_: &Theme| container::Style {
-            background: Some(muted.into()),
-            border: Border {
-                radius: 2.0.into(),
-                ..Border::default()
-            },
-            ..container::Style::default()
-        }),
+        // The theme's two surface shades.
+        swatch(palette.background.weak.color),
+        swatch(palette.background.strong.color),
     ]
     .spacing(6)
     .align_y(iced::Alignment::Center);
 
-    let inner = container(column![name_row, swatches].spacing(10))
+    let inner = container(column![name_row, sample_row, swatches].spacing(8))
         .padding([12, 14])
         .width(Length::Fill)
         .style(move |_: &Theme| container::Style {

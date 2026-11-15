@@ -21,7 +21,7 @@ use station_resolver::Resolver;
 use crate::app::helpers::service_name;
 use crate::app::message::Message;
 use crate::app::state::App;
-use crate::app::theme::{cell, cell_fill, label, muted, table_header, table_row};
+use crate::app::theme::{self, cell, cell_fill, label, muted, table_header, table_row};
 use radio_core::{Qso, QsoId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -533,13 +533,14 @@ fn view_confirmations_pane(app: &App) -> Element<'_, Message> {
                 W_CONFIRMED
             ),
             cell(service_name(&c.service), W_SERVICE),
-            cell(c.call.as_str(), W_CALL),
+            cell(c.call.as_str(), W_CALL).style(theme::call),
             cell(c.qso_begin.format("%Y-%m-%d %H:%M").to_string(), W_QSO_TIME).style(muted),
-            cell(c.band.map(|b| b.as_adif()).unwrap_or(""), W_BAND),
+            cell(c.band.map(|b| b.as_adif()).unwrap_or(""), W_BAND).style(theme::band),
             cell(
                 c.mode.as_ref().map(|m| m.as_adif().to_string()).unwrap_or_default(),
                 W_MODE
-            ),
+            )
+            .style(theme::mode),
             cell_fill(r.entity.as_str()),
         ];
         list = list.push(table_row(cells, Message::ConfirmationClicked(c.qso_id), false));

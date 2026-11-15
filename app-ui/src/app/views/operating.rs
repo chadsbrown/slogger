@@ -490,10 +490,12 @@ impl App {
         {
             let needed = info.status == SpotStatus::NeededBand;
             let worked = info.status == SpotStatus::Worked;
-            // Needed spots pop; already-worked ones recede.
-            let tone = move |theme: &Theme| -> text::Style {
-                if worked { muted(theme) } else { text::Style::default() }
+            // Needed spots pop; already-worked ones recede, losing their
+            // column colours along with their brightness.
+            let tint = move |live: fn(&Theme) -> text::Style| {
+                move |theme: &Theme| if worked { muted(theme) } else { live(theme) }
             };
+            let tone = tint(|_| text::Style::default());
             let status = cell(status_label(info.status), W_STATUS).style(move |theme: &Theme| {
                 if needed { text::success(theme) } else { muted(theme) }
             });
@@ -501,10 +503,11 @@ impl App {
                 status,
                 cell_right(age_label(now.signed_duration_since(spot.spotted_at)), W_AGE)
                     .style(muted),
-                cell(spot.call.as_str(), W_CALL).style(tone),
-                cell_right(khz(spot.freq_hz as i64), W_FREQ).style(tone),
-                cell(info.band.map(|b| b.as_adif()).unwrap_or(""), W_BAND).style(tone),
-                cell(spot.mode.as_deref().unwrap_or(""), W_MODE).style(tone),
+                cell(spot.call.as_str(), W_CALL).style(tint(theme::call)),
+                cell_right(khz(spot.freq_hz as i64), W_FREQ).style(tint(theme::freq)),
+                cell(info.band.map(|b| b.as_adif()).unwrap_or(""), W_BAND)
+                    .style(tint(theme::band)),
+                cell(spot.mode.as_deref().unwrap_or(""), W_MODE).style(tint(theme::mode)),
                 cell(info.country.clone().unwrap_or_default(), W_ENTITY).style(tone),
                 cell_fill(spot.comment.as_deref().unwrap_or("")),
             ];
@@ -544,13 +547,14 @@ impl App {
             let cells = row![
                 cell(q.qso_begin.format("%Y-%m-%d").to_string(), W_DATE).style(muted),
                 cell(q.qso_begin.format("%H:%M").to_string(), W_TIME),
-                cell(q.call.as_str(), W_CALL),
-                cell_right(q.freq_hz.map(khz).unwrap_or_default(), W_FREQ),
-                cell(q.band.map(|b| b.as_adif()).unwrap_or(""), W_BAND),
+                cell(q.call.as_str(), W_CALL).style(theme::call),
+                cell_right(q.freq_hz.map(khz).unwrap_or_default(), W_FREQ).style(theme::freq),
+                cell(q.band.map(|b| b.as_adif()).unwrap_or(""), W_BAND).style(theme::band),
                 cell(
                     q.mode.as_ref().map(|m| m.as_adif().to_string()).unwrap_or_default(),
                     W_MODE
-                ),
+                )
+                .style(theme::mode),
                 cell(q.dxcc_prefix.as_deref().unwrap_or(""), W_PREFIX),
                 cell(q.continent.as_deref().unwrap_or(""), W_CONT),
                 cell_fill(q.cq_zone.map(|z| z.to_string()).unwrap_or_default()),
@@ -605,7 +609,7 @@ impl App {
                     }
                 )),
                 row![
-                    text(freq).font(MONO).size(22),
+                    text(freq).font(MONO).size(22).style(theme::freq),
                     text(detail).size(ROW_TEXT).style(muted),
                 ]
                 .spacing(10)
