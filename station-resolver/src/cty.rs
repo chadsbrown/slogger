@@ -16,6 +16,9 @@ pub enum CtyLoadError {
 
 pub struct CtyDbResolver {
     inner: station_data::CtyDb,
+    /// Entity name by primary prefix. A lookup returns only the prefix,
+    /// so the name (cty.dat's first field) is found through this.
+    names: std::collections::HashMap<String, String>,
 }
 
 impl std::fmt::Debug for CtyDbResolver {
@@ -28,13 +31,28 @@ impl CtyDbResolver {
     pub fn from_path<P: AsRef<Path>>(path: P) -> Result<Self, CtyLoadError> {
         let inner = station_data::CtyDb::from_path(path.as_ref())
             .map_err(|e| CtyLoadError::Load(e.to_string()))?;
-        Ok(Self { inner })
+        Ok(Self::with_names(inner))
     }
 
     pub fn from_reader<R: Read>(reader: R) -> Result<Self, CtyLoadError> {
         let inner = station_data::CtyDb::from_reader(reader)
             .map_err(|e| CtyLoadError::Load(e.to_string()))?;
-        Ok(Self { inner })
+        Ok(Self::with_names(inner))
+    }
+}
+
+impl CtyDbResolver {
+    fn with_names(inner: station_data::CtyDb) -> Self {
+        // A lookup reports the entity under station-data's canonical
+        // prefix (`W` for the USA, whose cty.dat primary prefix is `K`),
+        // so the names are keyed the same way.
+        let mut names = std::collections::HashMap::new();
+        for c in &inner.countries {
+            names
+                .entry(station_data::contracts::canonical_dxcc_id(&c.dxcc))
+                .or_insert_with(|| c.name.clone());
+        }
+        Self { inner, names }
     }
 }
 
@@ -57,7 +75,7 @@ impl Resolver for CtyDbResolver {
         Some(Resolution {
             dxcc_id,
             dxcc_prefix: Some(resolved.dxcc.clone()),
-            country: None,
+            country: self.names.get(&resolved.dxcc).cloned(),
             continent: Some(resolved.continent.clone()),
             cq_zone: resolved.cq_zone.and_then(keep_zone),
             itu_zone: resolved.itu_zone.and_then(keep_zone),
@@ -92,6 +110,7 @@ Japan:                              25:  45:  AS:   36.24: -139.00:    -9.0:  JA
         assert_eq!(res.cq_zone, Some(5));
         assert_eq!(res.itu_zone, Some(8));
         assert_eq!(res.dxcc_id, Some(291));
+        assert_eq!(res.country.as_deref(), Some("United States of America"));
     }
 
     #[test]
