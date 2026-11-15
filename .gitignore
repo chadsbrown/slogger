@@ -1,1 +1,5 @@
 /target
+
+# ADIF logs hold other operators' names, addresses and email — never commit.
+*.adi
+*.adif
