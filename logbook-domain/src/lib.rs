@@ -27,6 +27,7 @@ pub use qsl_sync::{MATCH_TOLERANCE_SECS, ServiceQso, SyncOutcome, apply_report};
 pub use repository::{
     AwardQso, CreditUpgrade, DedupKey, DetailFill, ImportBatch, ImportedCredit,
     ImportedServiceState, PendingUploadCount, ProvenanceWrite, QsoDetail, QsoRepository,
-    QsoServiceState, RepoResult, RepositoryError, StationRepository, SyncBatch, SyncCandidate, SyncStateChange, SyncWatermark,
+    QsoServiceState, RecentConfirmation, RepoResult, RepositoryError, StationRepository,
+    SyncBatch, SyncCandidate, SyncStateChange, SyncWatermark,
 };
 pub use service::{BulkReport, ImportReport, LogbookService};

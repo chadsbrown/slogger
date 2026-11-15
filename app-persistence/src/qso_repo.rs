@@ -6,7 +6,8 @@ use uuid::Uuid;
 use logbook_domain::{
     AwardCredit, AwardQso, CreditStatus, DedupKey, FieldProvenance, ImportBatch, ImportedCredit,
     LocationDetail, LocationFilter, PendingUploadCount, QsoRepository, QsoSearch,
-    QsoServiceState, QsoSummary, RepoResult, RepositoryError, SyncBatch, SyncCandidate,
+    QsoServiceState, QsoSummary, RecentConfirmation, RepoResult, RepositoryError, SyncBatch,
+    SyncCandidate,
 };
 use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
@@ -1130,6 +1131,52 @@ impl QsoRepository for SqliteQsoRepository {
                 granted_credits: granted
                     .map(|g| g.split(',').map(String::from).collect())
                     .unwrap_or_default(),
+            });
+        }
+        Ok(out)
+    }
+
+    async fn list_recent_confirmations(&self, limit: u32) -> RepoResult<Vec<RecentConfirmation>> {
+        // Timestamps are stored as UTC RFC 3339, so text order is time
+        // order. SQLite sorts NULL lowest, which puts undated
+        // confirmations last under DESC. There is no index on
+        // confirmed_at: scanning and top-N sorting ~110k state rows takes
+        // ~30 ms, well under what the refresh around it already spends.
+        let sql = "SELECT s.confirmed_at, s.service,
+                          q.id, q.call, q.qso_begin, q.band, q.mode,
+                          q.dxcc_id, q.dxcc_prefix, q.continent, q.state
+                   FROM qso_service_state s
+                   JOIN qsos q ON q.id = s.qso_id
+                   WHERE s.confirmation_state = 'confirmed'
+                     AND q.deleted_at IS NULL
+                   ORDER BY s.confirmed_at DESC, q.qso_begin DESC, s.qso_id, s.service
+                   LIMIT ?";
+        let rows = sqlx::query(sql)
+            .bind(i64::from(limit))
+            .fetch_all(&self.pool)
+            .await
+            .map_err(map_err)?;
+        let mut out = Vec::with_capacity(rows.len());
+        for row in &rows {
+            let confirmed_at: Option<String> = row.try_get("confirmed_at").map_err(map_err)?;
+            let id: String = row.try_get("id").map_err(map_err)?;
+            let call: String = row.try_get("call").map_err(map_err)?;
+            let qso_begin: String = row.try_get("qso_begin").map_err(map_err)?;
+            let band: Option<String> = row.try_get("band").map_err(map_err)?;
+            let mode: Option<String> = row.try_get("mode").map_err(map_err)?;
+            let dxcc_id: Option<i64> = row.try_get("dxcc_id").map_err(map_err)?;
+            out.push(RecentConfirmation {
+                confirmed_at: confirmed_at.as_deref().map(parse_dt).transpose()?,
+                service: row.try_get("service").map_err(map_err)?,
+                qso_id: QsoId::from_uuid(parse_uuid(&id)?),
+                call: parse_callsign(&call)?,
+                qso_begin: parse_dt(&qso_begin)?,
+                band: band.as_deref().and_then(Band::from_adif),
+                mode: mode.as_deref().map(Mode::from_adif),
+                dxcc_id: dxcc_id.map(|v| v as u16),
+                dxcc_prefix: row.try_get("dxcc_prefix").map_err(map_err)?,
+                continent: row.try_get("continent").map_err(map_err)?,
+                state: row.try_get("state").map_err(map_err)?,
             });
         }
         Ok(out)
@@ -3202,5 +3249,58 @@ Japan:                              25:  45:  AS:   36.24: -139.00:    -9.0:  JA
             .unwrap();
         assert!(adif.contains("<CNTY:7>IN,Lake"), "{adif}");
         assert!(!adif.contains("service_") && !adif.contains("IN,Porter"), "{adif}");
+    }
+
+    #[tokio::test]
+    async fn recent_confirmations_are_newest_first_per_service_and_skip_deleted() {
+        let db = Database::open_in_memory().await.unwrap();
+        let repo = Arc::new(SqliteQsoRepository::new(&db));
+        let svc = LogbookService::new(repo.clone());
+        let log = |call: &str, day: u32| {
+            let mut cmd = CreateQsoCommand::minimal(
+                Callsign::parse(call).unwrap(),
+                Utc.with_ymd_and_hms(2026, 1, day, 12, 0, 0).unwrap(),
+            );
+            cmd.band = Some(Band::M20);
+            cmd.mode = Some(Mode::CW);
+            cmd
+        };
+        let a = svc.create_qso(log("DL1AAA", 1)).await.unwrap();
+        let b = svc.create_qso(log("G4BBB", 2)).await.unwrap();
+        let c = svc.create_qso(log("JA1CCC", 3)).await.unwrap();
+        let d = svc.create_qso(log("VK2DDD", 4)).await.unwrap();
+        let e = svc.create_qso(log("PY1EEE", 5)).await.unwrap();
+        let day = |m: u32, d: u32| Utc.with_ymd_and_hms(2026, m, d, 0, 0, 0).unwrap();
+
+        // A is confirmed by two services; B on the same LoTW day as A.
+        repo.mark_confirmed(&a, "lotw", day(3, 1), None).await.unwrap();
+        repo.mark_confirmed(&a, "eqsl", day(2, 1), None).await.unwrap();
+        repo.mark_confirmed(&b, "lotw", day(3, 1), None).await.unwrap();
+        // C is only uploaded; D is the newest confirmation but deleted.
+        repo.mark_uploaded(&c, "lotw", day(1, 10), None).await.unwrap();
+        repo.mark_confirmed(&d, "lotw", day(4, 1), None).await.unwrap();
+        repo.soft_delete_qso(&d).await.unwrap();
+        // E is confirmed with no date, as an import without QSLRDATE leaves it.
+        repo.mark_confirmed(&e, "clublog", day(5, 1), None).await.unwrap();
+        sqlx::query("UPDATE qso_service_state SET confirmed_at = NULL WHERE qso_id = ?")
+            .bind(fmt_id(e.as_uuid()))
+            .execute(db.pool())
+            .await
+            .unwrap();
+
+        let all = repo.list_recent_confirmations(200).await.unwrap();
+        let got: Vec<_> = all.iter().map(|r| (r.qso_id, r.service.as_str())).collect();
+        // Same day: the later QSO (B) first. Undated last.
+        assert_eq!(got, vec![(b, "lotw"), (a, "lotw"), (a, "eqsl"), (e, "clublog")]);
+        assert_eq!(all[0].confirmed_at, Some(day(3, 1)));
+        assert_eq!(all[0].call.as_str(), "G4BBB");
+        assert_eq!(all[0].qso_begin, Utc.with_ymd_and_hms(2026, 1, 2, 12, 0, 0).unwrap());
+        assert_eq!(all[0].band, Some(Band::M20));
+        assert_eq!(all[0].mode, Some(Mode::CW));
+        assert_eq!(all[3].confirmed_at, None);
+
+        let capped = repo.list_recent_confirmations(2).await.unwrap();
+        let got: Vec<_> = capped.iter().map(|r| (r.qso_id, r.service.as_str())).collect();
+        assert_eq!(got, vec![(b, "lotw"), (a, "lotw")]);
     }
 }

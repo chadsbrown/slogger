@@ -19,6 +19,7 @@ use logbook_domain::{
 use radio_core::{Band, Mode, PropagationMode, QsoId, StationLocation};
 
 use crate::app::constants::{BANDS, modes};
+use crate::app::helpers::service_name;
 use crate::app::message::Message;
 use crate::app::state::App;
 use crate::app::theme;
@@ -455,18 +456,6 @@ type DetailSection = (&'static str, Vec<(String, String)>);
 
 fn timestamp(t: DateTime<Utc>) -> String {
     t.format("%Y-%m-%d %H:%M:%S UTC").to_string()
-}
-
-/// Display name for a QSL service key as stored in the database.
-fn service_name(key: &str) -> String {
-    match key {
-        "lotw" => "LoTW".into(),
-        "eqsl" => "eQSL".into(),
-        "clublog" => "Club Log".into(),
-        "qrz" => "QRZ".into(),
-        "hrdlog" => "HRDLog".into(),
-        other => other.to_string(),
-    }
 }
 
 /// Everything stored about a QSO beyond what the entry form edits,

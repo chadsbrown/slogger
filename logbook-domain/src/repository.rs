@@ -113,6 +113,28 @@ pub struct QsoDetail {
     pub provenance: Vec<FieldProvenance>,
 }
 
+/// One service's confirmation of one QSO, with enough of the QSO to
+/// recognise it in a list. A QSO confirmed by two services is two of
+/// these.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RecentConfirmation {
+    /// When the service recorded the confirmation (LoTW's `QSLRDATE`).
+    /// `None` for confirmations stored without a date, e.g. an imported
+    /// `QSL_RCVD=Y` that carried no received date.
+    pub confirmed_at: Option<DateTime<Utc>>,
+    /// Service key: `lotw`, `eqsl`, `clublog`, `qrz`, `hrdlog`.
+    pub service: String,
+    pub qso_id: QsoId,
+    pub call: Callsign,
+    pub qso_begin: DateTime<Utc>,
+    pub band: Option<Band>,
+    pub mode: Option<Mode>,
+    pub dxcc_id: Option<u16>,
+    pub dxcc_prefix: Option<String>,
+    pub continent: Option<String>,
+    pub state: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct PendingUpload {
     pub qso_id: QsoId,
@@ -435,6 +457,13 @@ pub trait QsoRepository: std::fmt::Debug + Send + Sync {
     /// the slim shape needed for award aggregation. Awards code is pure
     /// Rust on top of this — keeps SQL out of the awards layer.
     async fn list_award_qsos(&self) -> RepoResult<Vec<AwardQso>>;
+
+    /// The `limit` most recent confirmations across every service, newest
+    /// `confirmed_at` first; ties (LoTW dates are whole days) go to the
+    /// later QSO, then by QSO id and service so the order is stable.
+    /// Confirmations with no date come after all dated ones.
+    /// QSOs that are soft-deleted are left out.
+    async fn list_recent_confirmations(&self, limit: u32) -> RepoResult<Vec<RecentConfirmation>>;
 
     /// Look up a QSO by station callsign + worked callsign + UTC date +
     /// band + mode — what the eQSL inbox fetch matches on. Returns at most

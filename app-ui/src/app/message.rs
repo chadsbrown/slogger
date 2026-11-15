@@ -184,6 +184,10 @@ pub enum Message {
     QslBulkMarkUploaded(String),
     QslBulkDelete,
     QslBulkFinished(Result<String, String>),
+    /// The Confirmations pane's list, loaded with entity names resolved.
+    ConfirmationsLoaded(Result<Vec<super::views::qsl::ConfirmationRow>, String>),
+    /// A Confirmations row was clicked: show that QSO in the Logbook tab.
+    ConfirmationClicked(QsoId),
 }
 
 /// Payload for a successful logbook search. `total` is the count from

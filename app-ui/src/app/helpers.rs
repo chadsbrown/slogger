@@ -7,6 +7,18 @@ pub(super) fn station_call_from_config(s: &StationConfig) -> Option<Callsign> {
         .and_then(|c| Callsign::parse(c).ok())
 }
 
+/// Display name for a QSL service key as stored in the database.
+pub(super) fn service_name(key: &str) -> String {
+    match key {
+        "lotw" => "LoTW".into(),
+        "eqsl" => "eQSL".into(),
+        "clublog" => "Club Log".into(),
+        "qrz" => "QRZ".into(),
+        "hrdlog" => "HRDLog".into(),
+        other => other.to_string(),
+    }
+}
+
 pub(super) fn option_from_str(s: &str) -> Option<String> {
     let t = s.trim();
     if t.is_empty() {

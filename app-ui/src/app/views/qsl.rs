@@ -4,20 +4,24 @@
 //!   last upload/fetch timestamps, last error inline.
 //! - **Pending QSOs** — list of QSOs pending upload, filterable by
 //!   service, with bulk mark-uploaded / soft-delete toolbar.
-//! - **Confirmations** — recent inbound confirmations (placeholder for
-//!   now; will hold the LotW QSL_RCVD / eQSL inbox surface).
+//! - **Confirmations** — the most recent confirmations from every
+//!   service, newest first; a row opens its QSO in the Logbook tab.
 
 use std::collections::HashSet;
 
 use iced::widget::pane_grid::{Axis, Configuration, Content, PaneGrid, TitleBar};
 use iced::widget::{
-    button, checkbox, column, container, pick_list, row, scrollable, text,
+    button, checkbox, column, container, pick_list, row, rule, scrollable, text,
 };
 use iced::{Element, Length};
+use logbook_domain::RecentConfirmation;
 use serde::{Deserialize, Serialize};
+use station_resolver::Resolver;
 
+use crate::app::helpers::service_name;
 use crate::app::message::Message;
 use crate::app::state::App;
+use crate::app::theme::{cell, cell_fill, label, muted, table_header, table_row};
 use radio_core::{Qso, QsoId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -77,7 +81,7 @@ impl QslService {
 
     pub fn label(self) -> &'static str {
         match self {
-            QslService::Lotw => "LotW",
+            QslService::Lotw => "LoTW",
             QslService::Eqsl => "eQSL",
             QslService::ClubLog => "Club Log",
             QslService::Qrz => "QRZ",
@@ -130,6 +134,69 @@ pub(crate) struct QslViewState {
     pub loading_pending: bool,
     pub selected: HashSet<QsoId>,
     pub last_action: Option<String>,
+    /// The Confirmations pane's list. `None` until it is first loaded,
+    /// which happens when the QSL tab is opened; after that every
+    /// `refresh_task` reloads it.
+    pub confirmations: Option<Vec<ConfirmationRow>>,
+    /// Why the last load of `confirmations` failed, if it did.
+    pub confirmations_error: Option<String>,
+}
+
+/// How many confirmations the Confirmations pane lists.
+pub(crate) const RECENT_CONFIRMATIONS_LIMIT: u32 = 200;
+
+/// One row of the Confirmations pane: the confirmation plus the entity
+/// name to show for it, worked out once when the list is loaded rather
+/// than on every frame.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConfirmationRow {
+    pub confirmation: RecentConfirmation,
+    pub entity: String,
+}
+
+pub(crate) fn confirmation_rows(
+    confirmations: Vec<RecentConfirmation>,
+    resolver: Option<&dyn Resolver>,
+) -> Vec<ConfirmationRow> {
+    confirmations
+        .into_iter()
+        .map(|c| ConfirmationRow {
+            entity: entity_label(&c, resolver),
+            confirmation: c,
+        })
+        .collect()
+}
+
+/// The entity column for a confirmation. The country name comes from the
+/// callsign resolver, as on the Operating tab, but only when it doesn't
+/// contradict the entity stored on the QSO: that one was right for the
+/// QSO's date, while the resolver knows today's prefixes. Otherwise the
+/// stored prefix, then the entity number.
+fn entity_label(c: &RecentConfirmation, resolver: Option<&dyn Resolver>) -> String {
+    let resolved = resolver.and_then(|r| r.resolve(&c.call));
+    if let Some(res) = resolved {
+        let contradicts = matches!((res.dxcc_id, c.dxcc_id), (Some(a), Some(b)) if a != b);
+        if let Some(country) = res.country.filter(|_| !contradicts) {
+            return country;
+        }
+    }
+    match (&c.dxcc_prefix, c.dxcc_id) {
+        (Some(prefix), _) => prefix.clone(),
+        (None, Some(id)) => format!("#{id}"),
+        (None, None) => String::new(),
+    }
+}
+
+/// The line above the table. A full list is the newest `limit`, not
+/// every confirmation in the log, and says so.
+fn confirmations_heading(count: usize, limit: u32) -> String {
+    if count >= limit as usize {
+        format!("Most recent {limit} confirmations")
+    } else if count == 1 {
+        "1 confirmation".into()
+    } else {
+        format!("{count} confirmations")
+    }
 }
 
 pub(in crate::app) fn view(app: &App) -> Element<'_, Message> {
@@ -422,20 +489,146 @@ fn view_pending_pane(app: &App) -> Element<'_, Message> {
     .into()
 }
 
-fn view_confirmations_pane(_app: &App) -> Element<'_, Message> {
-    // First cut: just a hint pointing the operator at the bottom of the
-    // service-status pane for fetch counts. A proper "recent
-    // confirmations" listing wants a repo query for QSOs with
-    // `confirmed_at` in the last N days — added later.
-    column![
-        text("Recent confirmations").size(13),
-        text(
-            "Per-QSO confirmation list lands here once the repo exposes \
-             `confirmed_since`. For now the Service status pane above \
-             shows how many confirmations the last fetch picked up."
-        )
-        .size(11),
-    ]
-    .spacing(6)
-    .into()
+// Column widths for the Confirmations table, in the monospace cell font.
+const W_CONFIRMED: f32 = 84.0;
+const W_SERVICE: f32 = 70.0;
+const W_CALL: f32 = 96.0;
+const W_QSO_TIME: f32 = 128.0;
+const W_BAND: f32 = 40.0;
+const W_MODE: f32 = 44.0;
+
+fn view_confirmations_pane(app: &App) -> Element<'_, Message> {
+    let state = &app.qsl_view;
+    let mut out = column![].spacing(4);
+    if let Some(e) = &state.confirmations_error {
+        out = out.push(label(format!("Couldn't load confirmations: {e}")));
+    }
+    let Some(rows) = &state.confirmations else {
+        if state.confirmations_error.is_none() {
+            out = out.push(label("Loading…"));
+        }
+        return out.into();
+    };
+    if rows.is_empty() {
+        return out.push(label("No confirmations yet.")).into();
+    }
+
+    let header = table_header(row![
+        cell("CONFIRMED", W_CONFIRMED),
+        cell("SERVICE", W_SERVICE),
+        cell("CALL", W_CALL),
+        cell("QSO UTC", W_QSO_TIME),
+        cell("BAND", W_BAND),
+        cell("MODE", W_MODE),
+        cell_fill("ENTITY"),
+    ]);
+    let mut list = column![].spacing(0);
+    for r in rows {
+        let c = &r.confirmation;
+        let cells = row![
+            cell(
+                c.confirmed_at
+                    .map(|t| t.format("%Y-%m-%d").to_string())
+                    .unwrap_or_else(|| "—".into()),
+                W_CONFIRMED
+            ),
+            cell(service_name(&c.service), W_SERVICE),
+            cell(c.call.as_str(), W_CALL),
+            cell(c.qso_begin.format("%Y-%m-%d %H:%M").to_string(), W_QSO_TIME).style(muted),
+            cell(c.band.map(|b| b.as_adif()).unwrap_or(""), W_BAND),
+            cell(
+                c.mode.as_ref().map(|m| m.as_adif().to_string()).unwrap_or_default(),
+                W_MODE
+            ),
+            cell_fill(r.entity.as_str()),
+        ];
+        list = list.push(table_row(cells, Message::ConfirmationClicked(c.qso_id), false));
+    }
+
+    out.push(label(confirmations_heading(rows.len(), RECENT_CONFIRMATIONS_LIMIT)))
+        .push(header)
+        .push(rule::horizontal(1))
+        .push(scrollable(list).height(Length::Fill))
+        .into()
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::{TimeZone, Utc};
+    use radio_core::{Band, Callsign, Mode};
+    use station_resolver::Resolution;
+
+    use super::*;
+
+    #[derive(Debug)]
+    struct FixedResolver(Resolution);
+
+    impl Resolver for FixedResolver {
+        fn resolve(&self, _call: &Callsign) -> Option<Resolution> {
+            Some(self.0.clone())
+        }
+    }
+
+    fn resolves_to(dxcc_id: Option<u16>, country: Option<&str>) -> FixedResolver {
+        FixedResolver(Resolution {
+            dxcc_id,
+            country: country.map(String::from),
+            ..Resolution::empty()
+        })
+    }
+
+    fn confirmation(dxcc_id: Option<u16>, dxcc_prefix: Option<&str>) -> RecentConfirmation {
+        RecentConfirmation {
+            confirmed_at: Some(Utc.with_ymd_and_hms(2026, 3, 1, 0, 0, 0).unwrap()),
+            service: "lotw".into(),
+            qso_id: QsoId::new(),
+            call: Callsign::parse("DL1ABC").unwrap(),
+            qso_begin: Utc.with_ymd_and_hms(2026, 1, 2, 12, 0, 0).unwrap(),
+            band: Some(Band::M20),
+            mode: Some(Mode::CW),
+            dxcc_id,
+            dxcc_prefix: dxcc_prefix.map(String::from),
+            continent: None,
+            state: None,
+        }
+    }
+
+    #[test]
+    fn entity_is_the_resolved_country_unless_it_contradicts_the_qso() {
+        let c = confirmation(Some(230), Some("DL"));
+        let germany = resolves_to(Some(230), Some("Germany"));
+        assert_eq!(entity_label(&c, Some(&germany)), "Germany");
+        // The resolver doesn't always know the entity number.
+        let unnumbered = resolves_to(None, Some("Germany"));
+        assert_eq!(entity_label(&c, Some(&unnumbered)), "Germany");
+        // The QSO's stored entity wins over a different one today.
+        let elsewhere = resolves_to(Some(281), Some("Spain"));
+        assert_eq!(entity_label(&c, Some(&elsewhere)), "DL");
+    }
+
+    #[test]
+    fn entity_falls_back_to_prefix_then_number_then_blank() {
+        let nameless = resolves_to(Some(230), None);
+        assert_eq!(entity_label(&confirmation(Some(230), Some("DL")), Some(&nameless)), "DL");
+        assert_eq!(entity_label(&confirmation(Some(230), Some("DL")), None), "DL");
+        assert_eq!(entity_label(&confirmation(Some(230), None), None), "#230");
+        assert_eq!(entity_label(&confirmation(None, None), None), "");
+    }
+
+    #[test]
+    fn rows_keep_order_and_carry_their_entity() {
+        let first = confirmation(Some(230), Some("DL"));
+        let second = confirmation(None, None);
+        let rows = confirmation_rows(vec![first.clone(), second.clone()], None);
+        assert_eq!(rows.len(), 2);
+        assert_eq!((&rows[0].confirmation, rows[0].entity.as_str()), (&first, "DL"));
+        assert_eq!((&rows[1].confirmation, rows[1].entity.as_str()), (&second, ""));
+    }
+
+    #[test]
+    fn heading_says_when_the_list_is_capped() {
+        assert_eq!(confirmations_heading(200, 200), "Most recent 200 confirmations");
+        assert_eq!(confirmations_heading(37, 200), "37 confirmations");
+        assert_eq!(confirmations_heading(1, 200), "1 confirmation");
+    }
 }

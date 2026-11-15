@@ -26,6 +26,7 @@ use super::panels::Panels;
 use super::services::{format_lotw_fetch, format_multi_summary, run_lotw_sync, run_services_update};
 use super::spots::{SpotSort, build_worked_by_band};
 use super::state::{App, EntryDraft};
+use super::views::qsl::{RECENT_CONFIRMATIONS_LIMIT, confirmation_rows};
 
 impl App {
     pub fn update(&mut self, message: Message) -> Task<Message> {
@@ -72,6 +73,12 @@ impl App {
                         self.theme = t;
                     }
                 }
+                // The QSL tab may have been opened before the database was.
+                let confirmations = if self.current_view == super::views::ViewKind::Qsl {
+                    self.confirmations_task()
+                } else {
+                    Task::none()
+                };
                 // Land with the cursor in the Call field: the operator can
                 // start typing the moment the window appears.
                 Task::batch([
@@ -79,6 +86,7 @@ impl App {
                         refresh(bundle.repo, bundle.station_repo, bundle.service),
                         Message::Refreshed,
                     ),
+                    confirmations,
                     focus_call(),
                 ])
             }
@@ -719,13 +727,38 @@ impl App {
                 self.current_view = view;
                 // Auto-refresh the QSL Pending pane on first switch
                 // into QSL so the operator sees fresh data immediately.
+                let confirmations = if matches!(view, super::views::ViewKind::Qsl)
+                    && self.qsl_view.confirmations.is_none()
+                {
+                    self.confirmations_task()
+                } else {
+                    Task::none()
+                };
                 if matches!(view, super::views::ViewKind::Qsl)
                     && self.qsl_view.pending.is_empty()
                     && !self.qsl_view.loading_pending
                 {
-                    return Task::batch([ended, self.run_qsl_pending_refresh()]);
+                    return Task::batch([ended, confirmations, self.run_qsl_pending_refresh()]);
                 }
-                ended
+                Task::batch([ended, confirmations])
+            }
+            Message::ConfirmationsLoaded(Ok(rows)) => {
+                self.qsl_view.confirmations = Some(rows);
+                self.qsl_view.confirmations_error = None;
+                Task::none()
+            }
+            Message::ConfirmationsLoaded(Err(e)) => {
+                // The list already shown, if any, stays up under the error.
+                self.qsl_view.confirmations_error = Some(e);
+                Task::none()
+            }
+            Message::ConfirmationClicked(id) => {
+                // The Logbook tab is where one QSO is shown in full. Switch
+                // first: the edit QsoSelected starts then belongs to that
+                // tab, and ends when the operator leaves it.
+                let switched = self.update(Message::ViewChanged(super::views::ViewKind::Logbook));
+                let selected = self.update(Message::QsoSelected(id));
+                Task::batch([switched, selected])
             }
             Message::QslServiceFilterChanged(filter) => {
                 self.qsl_view.service_filter = filter;
@@ -1162,12 +1195,39 @@ impl App {
     }
 
     pub(super) fn refresh_task(&self) -> Task<Message> {
-        match (self.repo.clone(), self.station_repo.clone(), self.service.clone()) {
+        let refreshed = match (self.repo.clone(), self.station_repo.clone(), self.service.clone()) {
             (Some(repo), Some(stations), Some(svc)) => {
                 Task::perform(refresh(repo, stations, svc), Message::Refreshed)
             }
             _ => Task::none(),
+        };
+        // Syncs, imports, deletes and edits all end here, so once the
+        // QSL tab has shown the confirmations list it is kept current
+        // from here too. Until then it waits for the tab to be opened.
+        if self.qsl_view.confirmations.is_some() {
+            Task::batch([refreshed, self.confirmations_task()])
+        } else {
+            refreshed
         }
+    }
+
+    /// Loads the QSL tab's recent-confirmations list. Entity names are
+    /// resolved here, once per load, not per row on every frame.
+    fn confirmations_task(&self) -> Task<Message> {
+        let Some(repo) = self.repo.clone() else {
+            return Task::none();
+        };
+        let resolver = self.resolver.clone();
+        Task::perform(
+            async move {
+                let confirmations = repo
+                    .list_recent_confirmations(RECENT_CONFIRMATIONS_LIMIT)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                Ok(confirmation_rows(confirmations, resolver.as_deref()))
+            },
+            Message::ConfirmationsLoaded,
+        )
     }
 
     fn submit_qso(&mut self) -> Task<Message> {
@@ -1782,5 +1842,25 @@ mod tests {
         let _ = app.update(Message::ViewChanged(super::super::views::ViewKind::Logbook));
         assert_eq!(app.current_view, super::super::views::ViewKind::Operating);
         assert!(app.modal.is_some());
+    }
+
+    #[test]
+    fn clicking_a_confirmation_opens_the_logbook_tab() {
+        let (mut app, _) = App::init();
+        app.current_view = super::super::views::ViewKind::Qsl;
+        let _ = app.update(Message::ConfirmationClicked(QsoId::new()));
+        assert_eq!(app.current_view, super::super::views::ViewKind::Logbook);
+    }
+
+    #[test]
+    fn a_failed_confirmations_reload_keeps_the_list_shown() {
+        let (mut app, _) = App::init();
+        let _ = app.update(Message::ConfirmationsLoaded(Ok(vec![])));
+        assert_eq!(app.qsl_view.confirmations, Some(vec![]));
+        let _ = app.update(Message::ConfirmationsLoaded(Err("disk on fire".into())));
+        assert_eq!(app.qsl_view.confirmations, Some(vec![]));
+        assert_eq!(app.qsl_view.confirmations_error.as_deref(), Some("disk on fire"));
+        let _ = app.update(Message::ConfirmationsLoaded(Ok(vec![])));
+        assert!(app.qsl_view.confirmations_error.is_none());
     }
 }
