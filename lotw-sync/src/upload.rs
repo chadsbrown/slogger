@@ -1,41 +1,65 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 use tokio::process::Command;
 
 const DEFAULT_UPLOAD_URL: &str = "https://lotw.arrl.org/lotw/upload";
 
+/// How to reach TQSL and LoTW. Which TQSL station location and callsign
+/// to sign with are per call to [`LotwUploadClient::upload_adif`]: one
+/// logbook can hold QSOs from several locations and callsigns, and each
+/// batch must be signed with its own.
 #[derive(Debug, Clone)]
 pub struct LotwUploadConfig {
     pub tqsl_path: PathBuf,
-    pub station_location: String,
-    pub station_callsign: Option<String>,
     pub upload_url: String,
 }
 
-impl LotwUploadConfig {
-    pub fn new(station_location: impl Into<String>) -> Self {
+impl Default for LotwUploadConfig {
+    fn default() -> Self {
         Self {
             tqsl_path: PathBuf::from("tqsl"),
-            station_location: station_location.into(),
-            station_callsign: None,
             upload_url: DEFAULT_UPLOAD_URL.to_string(),
         }
     }
+}
 
+impl LotwUploadConfig {
     pub fn with_tqsl_path(mut self, path: PathBuf) -> Self {
         self.tqsl_path = path;
-        self
-    }
-
-    pub fn with_station_callsign(mut self, call: impl Into<String>) -> Self {
-        self.station_callsign = Some(call.into());
         self
     }
 
     pub fn with_upload_url(mut self, url: impl Into<String>) -> Self {
         self.upload_url = url.into();
         self
+    }
+}
+
+/// TQSL's verdict on a signing run: the `Final Status: Description (Code)`
+/// line it prints last in batch mode, or the exit status when that line
+/// is missing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TqslStatus {
+    /// TQSL's status code; `None` when TQSL printed no status and was
+    /// killed by a signal.
+    pub code: Option<i32>,
+    pub description: String,
+    /// The last other line TQSL wrote to stderr, which usually names the
+    /// actual problem (a missing certificate, an unknown location).
+    pub detail: Option<String>,
+}
+
+impl std::fmt::Display for TqslStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.description)?;
+        if let Some(code) = self.code {
+            write!(f, " ({code})")?;
+        }
+        if let Some(detail) = &self.detail {
+            write!(f, ": {detail}")?;
+        }
+        Ok(())
     }
 }
 
@@ -50,8 +74,8 @@ pub enum UploadError {
     #[error("tqsl invocation failed: {0}")]
     TqslSpawn(String),
 
-    #[error("tqsl exited with status {status}: {stderr}")]
-    TqslExit { status: i32, stderr: String },
+    #[error("TQSL: {0}")]
+    Tqsl(TqslStatus),
 
     #[error("read signed file error: {0}")]
     ReadSigned(String),
@@ -70,6 +94,17 @@ pub struct UploadOutcome {
     /// reliable from the response body, so we surface the raw body too.
     pub accepted: bool,
     pub raw_body: String,
+}
+
+/// What became of one batch handed to [`LotwUploadClient::upload_adif`].
+#[derive(Debug, Clone)]
+pub enum SignedUpload {
+    /// TQSL signed the batch and the .tq8 was posted to LoTW.
+    Posted(UploadOutcome),
+    /// TQSL signed nothing because, by its own records, every QSO was
+    /// already uploaded (or outside the certificate's date range).
+    /// Nothing was posted.
+    AlreadyUploaded(TqslStatus),
 }
 
 pub struct LotwUploadClient {
@@ -93,9 +128,15 @@ impl LotwUploadClient {
         &self.config
     }
 
-    /// End-to-end: write ADIF to temp file, invoke tqsl to sign it into a
-    /// .tq8, POST the .tq8 to the LotW upload URL, return the response.
-    pub async fn upload_adif(&self, adif: &str) -> Result<UploadOutcome, UploadError> {
+    /// End-to-end for one batch: write the ADIF to a temp file, have TQSL
+    /// sign it against `station_location` with `station_callsign`'s
+    /// certificate, and POST the .tq8 to LoTW.
+    pub async fn upload_adif(
+        &self,
+        adif: &str,
+        station_location: &str,
+        station_callsign: &str,
+    ) -> Result<SignedUpload, UploadError> {
         let dir = tempfile::tempdir()
             .map_err(|e| UploadError::TempFile(e.to_string()))?;
         let in_path = dir.path().join("upload.adi");
@@ -105,56 +146,153 @@ impl LotwUploadClient {
             .await
             .map_err(|e| UploadError::Write(e.to_string()))?;
 
-        sign_with_tqsl(
+        let signed = sign_with_tqsl(
             &self.config.tqsl_path,
-            &self.config.station_location,
-            self.config.station_callsign.as_deref(),
+            station_location,
+            station_callsign,
             &in_path,
             &out_path,
         )
         .await?;
+        if let SignResult::AlreadyUploaded(status) = signed {
+            return Ok(SignedUpload::AlreadyUploaded(status));
+        }
 
         let bytes = tokio::fs::read(&out_path)
             .await
             .map_err(|e| UploadError::ReadSigned(e.to_string()))?;
 
-        post_tq8(&self.http, &self.config.upload_url, bytes).await
+        post_tq8(&self.http, &self.config.upload_url, bytes)
+            .await
+            .map(SignedUpload::Posted)
     }
 }
 
+/// How a TQSL run ended, once it didn't fail.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SignResult {
+    /// The output .tq8 holds signed QSOs, ready to post.
+    Signed,
+    AlreadyUploaded(TqslStatus),
+}
+
 pub(crate) async fn sign_with_tqsl(
-    tqsl_path: &std::path::Path,
+    tqsl_path: &Path,
     station_location: &str,
-    station_callsign: Option<&str>,
-    in_path: &std::path::Path,
-    out_path: &std::path::Path,
-) -> Result<(), UploadError> {
+    station_callsign: &str,
+    in_path: &Path,
+    out_path: &Path,
+) -> Result<SignResult, UploadError> {
     let mut cmd = Command::new(tqsl_path);
-    cmd.arg("-d") // skip dialog
+    cmd.arg("-d") // no date-range dialog
+        // Sign what can be signed; skip QSOs TQSL knows were already
+        // uploaded or that fall outside the certificate's dates instead
+        // of signing them anyway (`all`) or asking (`ask`).
         .arg("-a")
-        .arg("all")
+        .arg("compliant")
         .arg("-l")
         .arg(station_location)
-        .arg("-x") // exit when done
+        // Overrides the location's callsign: picks the certificate for
+        // the call the QSOs were made under (e.g. a /P). TQSL refuses if
+        // it has no such certificate or its DXCC differs.
+        .arg("-c")
+        .arg(station_callsign)
+        .arg("-x") // batch mode: status on stderr, then exit
         .arg("-o")
-        .arg(out_path);
-    if let Some(call) = station_callsign {
-        cmd.arg("-c").arg(call);
-    }
-    cmd.arg(in_path);
+        .arg(out_path)
+        .arg(in_path);
 
     let output = cmd
         .output()
         .await
         .map_err(|e| UploadError::TqslSpawn(format!("{}: {e}", tqsl_path.display())))?;
 
-    if !output.status.success() {
-        return Err(UploadError::TqslExit {
-            status: output.status.code().unwrap_or(-1),
-            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-        });
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let output_present = std::fs::metadata(out_path).is_ok_and(|m| m.len() > 0);
+    classify(&stderr, output.status.code(), output_present)
+}
+
+/// Turns what TQSL printed and how it exited into a result. The
+/// `Final Status` line wins over the exit status: TQSL's documentation
+/// doesn't promise the two agree.
+pub(crate) fn classify(
+    stderr: &str,
+    exit_code: Option<i32>,
+    output_present: bool,
+) -> Result<SignResult, UploadError> {
+    let (code, description) = match final_status(stderr) {
+        Some((code, description)) => (Some(code), description),
+        None => (exit_code, describe_code(exit_code).to_string()),
+    };
+    let status = TqslStatus {
+        code,
+        description,
+        detail: last_detail_line(stderr),
+    };
+    match code {
+        // Success, or "some signed, some skipped as already uploaded".
+        Some(0) | Some(9) if output_present => Ok(SignResult::Signed),
+        Some(0) | Some(9) => Err(UploadError::Tqsl(TqslStatus {
+            detail: Some("TQSL reported success but wrote no signed file".into()),
+            ..status
+        })),
+        // "Already uploaded". Should TQSL still have written a file, post
+        // it: LoTW ignores duplicates, while marking QSOs uploaded that
+        // never reached LoTW would lose them silently.
+        Some(8) | Some(14) if output_present => Ok(SignResult::Signed),
+        Some(8) | Some(14) => Ok(SignResult::AlreadyUploaded(status)),
+        _ => Err(UploadError::Tqsl(status)),
     }
-    Ok(())
+}
+
+/// Parses TQSL's last `… Final Status: Description (Code)` line.
+pub(crate) fn final_status(stderr: &str) -> Option<(i32, String)> {
+    let line = stderr.lines().rev().find(|l| l.contains("Final Status:"))?;
+    let rest = line[line.find("Final Status:")? + "Final Status:".len()..].trim();
+    let open = rest.rfind('(')?;
+    let code = rest[open + 1..].strip_suffix(')')?.trim().parse().ok()?;
+    Some((code, rest[..open].trim().to_string()))
+}
+
+/// The last non-empty stderr line that isn't the final status, trimmed
+/// to a length that fits a one-line summary.
+fn last_detail_line(stderr: &str) -> Option<String> {
+    const MAX: usize = 160;
+    let line = stderr
+        .lines()
+        .map(str::trim)
+        .rev()
+        .find(|l| !l.is_empty() && !l.contains("Final Status:"))?;
+    Some(if line.chars().count() > MAX {
+        format!("{}…", line.chars().take(MAX).collect::<String>())
+    } else {
+        line.to_string()
+    })
+}
+
+/// TQSL's documented meaning of each status code, for when it exits
+/// without printing one.
+fn describe_code(code: Option<i32>) -> &'static str {
+    match code {
+        Some(0) => "Success",
+        Some(1) => "Cancelled by user",
+        Some(2) => "Rejected by LoTW",
+        Some(3) => "Unexpected response from LoTW server",
+        Some(4) => "TQSL error",
+        Some(5) => "TQSLlib error",
+        Some(6) => "Unable to open input file",
+        Some(7) => "Unable to open output file",
+        Some(8) => "No QSOs processed: already uploaded or out of date range",
+        Some(9) => "Some QSOs processed, some ignored as already uploaded or out of date range",
+        Some(10) => "Command syntax error",
+        Some(11) => "LoTW connection error",
+        Some(12) => "Unknown error",
+        Some(13) => "Upload tracking database locked",
+        Some(14) => "Some QSOs already uploaded",
+        Some(15) => "Invalid passphrase",
+        Some(_) => "Unrecognised TQSL status",
+        None => "TQSL was killed by a signal",
+    }
 }
 
 pub(crate) async fn post_tq8(
@@ -202,6 +340,14 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
     use tempfile::tempdir;
 
+    /// Script tests run one at a time. Writing an executable while another
+    /// test forks lets the child inherit the open file, and exec'ing it
+    /// then fails with "Text file busy".
+    fn serial() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     /// Drop a fake `tqsl` shell script that just copies its input file to
     /// the output location specified by `-o`. Lets us exercise the spawn
     /// path without needing a real cert.
@@ -214,56 +360,175 @@ mod tests {
         path
     }
 
-    const COPY_TQSL: &str = "#!/bin/sh
-# Parse the args we care about: -o <out> <input>
+    /// A fake `tqsl` that records its arguments (one per line) in
+    /// `args.txt` beside itself, optionally copies its input to the `-o`
+    /// file, prints `stderr` and exits with `exit`.
+    fn scripted_tqsl(dir: &std::path::Path, copy: bool, stderr: &str, exit: i32) -> PathBuf {
+        let args_file = dir.join("args.txt");
+        let body = format!(
+            "#!/bin/sh
+: > '{args}'
+for a in \"$@\"; do printf '%s\\n' \"$a\" >> '{args}'; done
 out=
 in=
 while [ $# -gt 0 ]; do
   case \"$1\" in
     -o) out=$2; shift 2 ;;
-    -d|-x) shift ;;
+    -d|-x|-q) shift ;;
     -a|-c|-l) shift 2 ;;
     *) in=$1; shift ;;
   esac
 done
-if [ -z \"$in\" ] || [ -z \"$out\" ]; then
-  echo missing args >&2
-  exit 2
-fi
-cp \"$in\" \"$out\"
-";
+if [ {copy} = 1 ]; then cp \"$in\" \"$out\"; fi
+printf '%s' '{stderr}' >&2
+exit {exit}
+",
+            args = args_file.display(),
+            copy = if copy { 1 } else { 0 },
+        );
+        fake_tqsl(dir, &body)
+    }
 
-    #[tokio::test]
-    async fn sign_with_tqsl_spawns_and_writes_output() {
-        let dir = tempdir().unwrap();
-        let tqsl = fake_tqsl(dir.path(), COPY_TQSL);
-        let in_path = dir.path().join("in.adi");
-        let out_path = dir.path().join("out.tq8");
+    async fn run_sign(tqsl: &std::path::Path, dir: &std::path::Path) -> Result<SignResult, UploadError> {
+        let in_path = dir.join("in.adi");
+        let out_path = dir.join("out.tq8");
         std::fs::write(&in_path, "<EOH>\n<CALL:4>W1AW<EOR>\n").unwrap();
-
-        sign_with_tqsl(&tqsl, "Home", Some("W1ABC"), &in_path, &out_path)
-            .await
-            .unwrap();
-
-        let signed = std::fs::read(&out_path).unwrap();
-        assert!(!signed.is_empty());
+        sign_with_tqsl(tqsl, "Field Day", "N9UNX/P", &in_path, &out_path).await
     }
 
     #[tokio::test]
-    async fn sign_with_tqsl_propagates_nonzero_exit() {
+    async fn sign_passes_location_callsign_and_compliant_action() {
+        let _serial = serial();
         let dir = tempdir().unwrap();
-        let tqsl = fake_tqsl(dir.path(), "#!/bin/sh\nexit 7\n");
-        let in_path = dir.path().join("in.adi");
-        let out_path = dir.path().join("out.tq8");
-        std::fs::write(&in_path, "x").unwrap();
+        let tqsl = scripted_tqsl(dir.path(), true, "10:01:02 AM Final Status: Success (0)\n", 0);
+        assert_eq!(run_sign(&tqsl, dir.path()).await.unwrap(), SignResult::Signed);
 
-        let err = sign_with_tqsl(&tqsl, "Home", None, &in_path, &out_path)
-            .await
-            .unwrap_err();
-        match err {
-            UploadError::TqslExit { status, .. } => assert_eq!(status, 7),
-            other => panic!("expected TqslExit, got {other:?}"),
+        let args = std::fs::read_to_string(dir.path().join("args.txt")).unwrap();
+        let args: Vec<&str> = args.lines().collect();
+        let after = |flag: &str| args[args.iter().position(|a| *a == flag).unwrap() + 1];
+        assert_eq!(after("-a"), "compliant");
+        assert_eq!(after("-l"), "Field Day", "a name with a space stays one argument");
+        assert_eq!(after("-c"), "N9UNX/P");
+        assert!(args.contains(&"-x") && args.contains(&"-d"));
+        assert!(!std::fs::read(dir.path().join("out.tq8")).unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn partly_already_uploaded_still_counts_as_signed() {
+        let _serial = serial();
+        let dir = tempdir().unwrap();
+        let tqsl = scripted_tqsl(
+            dir.path(),
+            true,
+            "Signing...\n10:01:02 AM Final Status: Some QSOs were processed, some ignored (9)\n",
+            9,
+        );
+        assert_eq!(run_sign(&tqsl, dir.path()).await.unwrap(), SignResult::Signed);
+    }
+
+    #[tokio::test]
+    async fn nothing_signed_because_already_uploaded() {
+        let _serial = serial();
+        let dir = tempdir().unwrap();
+        let tqsl = scripted_tqsl(
+            dir.path(),
+            false,
+            "10:01:02 AM Final Status: No QSOs were processed since some QSOs were duplicates or out of date range (8)\n",
+            8,
+        );
+        match run_sign(&tqsl, dir.path()).await.unwrap() {
+            SignResult::AlreadyUploaded(status) => assert_eq!(status.code, Some(8)),
+            other => panic!("expected AlreadyUploaded, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn final_status_line_wins_over_exit_status() {
+        let _serial = serial();
+        let dir = tempdir().unwrap();
+        let tqsl = scripted_tqsl(
+            dir.path(),
+            false,
+            "Unable to sign: bad passphrase for certificate\n10:01:02 PM Final Status: Invalid passphrase (15)\n",
+            0,
+        );
+        match run_sign(&tqsl, dir.path()).await.unwrap_err() {
+            UploadError::Tqsl(status) => {
+                assert_eq!(status.code, Some(15));
+                assert_eq!(status.description, "Invalid passphrase");
+                assert_eq!(
+                    status.detail.as_deref(),
+                    Some("Unable to sign: bad passphrase for certificate")
+                );
+            }
+            other => panic!("expected Tqsl, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn falls_back_to_exit_status_without_a_final_status_line() {
+        let _serial = serial();
+        let dir = tempdir().unwrap();
+        let tqsl = scripted_tqsl(dir.path(), false, "", 7);
+        match run_sign(&tqsl, dir.path()).await.unwrap_err() {
+            UploadError::Tqsl(status) => {
+                assert_eq!(status.code, Some(7));
+                assert_eq!(status.description, "Unable to open output file");
+                assert_eq!(status.detail, None);
+            }
+            other => panic!("expected Tqsl, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn success_without_an_output_file_is_a_failure() {
+        let _serial = serial();
+        let dir = tempdir().unwrap();
+        let tqsl = scripted_tqsl(dir.path(), false, "Final Status: Success (0)\n", 0);
+        assert!(matches!(
+            run_sign(&tqsl, dir.path()).await,
+            Err(UploadError::Tqsl(TqslStatus { code: Some(0), .. }))
+        ));
+    }
+
+    #[tokio::test]
+    async fn already_uploaded_batch_is_not_posted() {
+        let _serial = serial();
+        let dir = tempdir().unwrap();
+        let tqsl = scripted_tqsl(dir.path(), false, "Final Status: No QSOs processed (8)\n", 8);
+        // Nothing listens on this URL: posting would fail the test.
+        let client = LotwUploadClient::new(
+            LotwUploadConfig::default()
+                .with_tqsl_path(tqsl)
+                .with_upload_url("http://127.0.0.1:9/upload"),
+        );
+        let outcome = client.upload_adif("<EOH>\n", "Home", "W1ABC").await.unwrap();
+        assert!(matches!(outcome, SignedUpload::AlreadyUploaded(_)));
+    }
+
+    #[test]
+    fn classify_treats_unknown_codes_as_failures() {
+        assert!(classify("Final Status: Upload tracking database locked (13)", Some(13), true).is_err());
+        assert!(classify("", None, true).is_err(), "killed by a signal");
+        // A file written despite "already uploaded" is posted, not dropped.
+        assert_eq!(
+            classify("Final Status: Some QSOs already uploaded (14)", Some(14), true).unwrap(),
+            SignResult::Signed
+        );
+    }
+
+    #[test]
+    fn final_status_parses_description_and_code() {
+        assert_eq!(
+            final_status("x\n08:15:00 AM Final Status: Success (0)\r\n"),
+            Some((0, "Success".to_string()))
+        );
+        assert_eq!(
+            final_status("Final Status: Rejected (by LoTW) (2)"),
+            Some((2, "Rejected (by LoTW)".to_string()))
+        );
+        assert_eq!(final_status("Final Status: garbled"), None);
+        assert_eq!(final_status("no status here"), None);
     }
 
     #[tokio::test]

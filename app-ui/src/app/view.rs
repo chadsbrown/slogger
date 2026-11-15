@@ -1,7 +1,7 @@
 //! Application shell: the tab bar, the selected view's body, and the
 //! persistent bottom status bar. Per-view content lives in `views/`.
 
-use iced::widget::{button, column, container, pick_list, row, text, text_input};
+use iced::widget::{button, column, container, pick_list, row, text};
 use iced::{Element, Length};
 
 use super::message::Message;
@@ -48,30 +48,64 @@ impl App {
         }
     }
 
-    /// Persistent bottom status bar. Left: the station selector and the
-    /// global status message. Centre: the UTC clock. Right: text size and
-    /// theme. On first launch (no station_locations yet) it also surfaces
-    /// the inline create-station form so setup is reachable.
+    /// Persistent bottom status bar. Left: the station selector with its
+    /// Edit / New buttons and the global status message. Centre: the UTC
+    /// clock. Right: text size and theme. Until the first station location
+    /// exists the selector is replaced by one prominent "Create station
+    /// location" button, so first-run setup is obvious.
     fn status_bar(&self) -> Element<'_, Message> {
-        let station_options: Vec<StationOption> = self
-            .station_locations
-            .iter()
-            .map(StationOption::from)
-            .collect();
-        let active_option: Option<StationOption> =
-            self.active_location.as_ref().map(StationOption::from);
+        let small_button = |caption: &'static str, msg: Message| {
+            button(text(caption).size(13))
+                .padding([2, 8])
+                .on_press(msg)
+                .style(theme::tab_style(false))
+        };
 
-        let left = row![
-            theme::label("STATION"),
-            pick_list(
-                station_options,
-                active_option,
-                Message::StationLocationSelected,
-            )
-            .placeholder("(none)")
-            .text_size(13)
-            .padding([2, 8])
-            .width(Length::Fixed(220.0)),
+        let mut left = row![theme::label("STATION")]
+            .spacing(10)
+            .align_y(iced::Alignment::Center);
+        if self.station_locations.is_empty() {
+            left = left.push(
+                button(text("Create station location").size(13))
+                    .padding([2, 10])
+                    .on_press(Message::NewStationPressed)
+                    .style(button::primary),
+            );
+        } else {
+            let station_options: Vec<StationOption> = self
+                .station_locations
+                .iter()
+                .map(StationOption::from)
+                .collect();
+            let active_option: Option<StationOption> =
+                self.active_location.as_ref().map(StationOption::from);
+            let edit = button(text("Edit").size(13))
+                .padding([2, 8])
+                .on_press_maybe(
+                    self.active_location
+                        .as_ref()
+                        .map(|_| Message::EditStationPressed),
+                )
+                .style(theme::tab_style(false));
+            left = left.push(
+                row![
+                    pick_list(
+                        station_options,
+                        active_option,
+                        Message::StationLocationSelected,
+                    )
+                    .placeholder("(none)")
+                    .text_size(13)
+                    .padding([2, 8])
+                    .width(Length::Fixed(220.0)),
+                    edit,
+                    small_button("New", Message::NewStationPressed),
+                ]
+                .spacing(4)
+                .align_y(iced::Alignment::Center),
+            );
+        }
+        let left = left.push(
             container(
                 text(self.status.as_deref().unwrap_or(""))
                     .size(13)
@@ -79,9 +113,7 @@ impl App {
             )
             .width(Length::Fill)
             .clip(true),
-        ]
-        .spacing(10)
-        .align_y(iced::Alignment::Center);
+        );
 
         let clock = row![
             text(chrono::Utc::now().format("%Y-%m-%d  %H:%M:%S").to_string())
@@ -92,16 +124,10 @@ impl App {
         .spacing(6)
         .align_y(iced::Alignment::Center);
 
-        let size_button = |caption: &'static str, msg: Message| {
-            button(text(caption).size(13))
-                .padding([2, 8])
-                .on_press(msg)
-                .style(theme::tab_style(false))
-        };
         let right = row![
             theme::label(format!("TEXT {:.0}%", self.font_scale * 100.0)),
-            size_button("A−", Message::FontScaleDown),
-            size_button("A+", Message::FontScaleUp),
+            small_button("A−", Message::FontScaleDown),
+            small_button("A+", Message::FontScaleUp),
             theme::label("THEME"),
             button(text(self.theme.to_string()).size(13))
                 .padding([2, 8])
@@ -113,7 +139,7 @@ impl App {
 
         // Left and right get equal shares so the clock sits at the true
         // centre of the window whatever their contents.
-        let selector_row = row![
+        let content = row![
             container(left).width(Length::FillPortion(1)),
             clock,
             container(right)
@@ -122,43 +148,6 @@ impl App {
         ]
         .spacing(10)
         .align_y(iced::Alignment::Center);
-
-        // Compact by default: just the selector row. The inline
-        // create-station form is appended only on first launch (no
-        // station_locations yet) so setup stays reachable; once the first
-        // location exists it folds away and the bar collapses to one line.
-        let mut content = column![selector_row].spacing(6);
-        if self.station_locations.is_empty() {
-            let create_btn = {
-                let btn = button(text(if self.creating_location {
-                    "Creating…"
-                } else {
-                    "Create"
-                }));
-                if self.creating_location {
-                    btn
-                } else {
-                    btn.on_press(Message::CreateLocationPressed)
-                }
-            };
-            content = content.push(
-                row![
-                    theme::label("NEW STATION"),
-                    text_input("Name", &self.new_location_name)
-                        .on_input(Message::NewLocationNameChanged)
-                        .width(Length::Fixed(140.0)),
-                    text_input("Call", &self.new_location_call)
-                        .on_input(Message::NewLocationCallsignChanged)
-                        .width(Length::Fixed(110.0)),
-                    text_input("Grid", &self.new_location_grid)
-                        .on_input(Message::NewLocationGridChanged)
-                        .width(Length::Fixed(110.0)),
-                    create_btn,
-                ]
-                .spacing(8)
-                .align_y(iced::Alignment::Center),
-            );
-        }
 
         container(content)
             .padding([4, 8])

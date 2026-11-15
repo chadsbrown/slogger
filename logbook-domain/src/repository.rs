@@ -199,6 +199,16 @@ pub struct ImportBatch {
     pub credits: Vec<ImportedCredit>,
 }
 
+/// How many QSOs at one station location are waiting for a service, split
+/// by whether they carry a station callsign. What an upload that can only
+/// send some locations' QSOs reports about the ones it holds back.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingUploadCount {
+    pub station_location_id: Option<StationLocationId>,
+    pub has_station_callsign: bool,
+    pub count: usize,
+}
+
 #[async_trait]
 pub trait QsoRepository: std::fmt::Debug + Send + Sync {
     async fn insert_qso(&self, qso: &Qso) -> RepoResult<()>;
@@ -252,6 +262,25 @@ pub trait QsoRepository: std::fmt::Debug + Send + Sync {
     async fn list_pending_uploads(
         &self,
         service: &str,
+        limit: Option<u32>,
+    ) -> RepoResult<Vec<Qso>>;
+
+    /// Pending uploads (same meaning as `list_pending_uploads`) counted
+    /// per (station location, has a station callsign).
+    async fn count_pending_uploads_by_location(
+        &self,
+        service: &str,
+    ) -> RepoResult<Vec<PendingUploadCount>>;
+
+    /// The newest `limit` pending uploads that are linked to one of
+    /// `locations` and carry a station callsign. LoTW can only sign QSOs
+    /// it can map to a TQSL location; selecting just those before the
+    /// limit is applied keeps QSOs it must hold back from filling every
+    /// batch and stalling the upload.
+    async fn list_pending_uploads_at(
+        &self,
+        service: &str,
+        locations: &[StationLocationId],
         limit: Option<u32>,
     ) -> RepoResult<Vec<Qso>>;
 

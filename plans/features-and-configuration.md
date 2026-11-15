@@ -43,10 +43,30 @@ Writes are awaited synchronously from the UI; no batched commits.
 ### Active station location
 
 At boot the first `station_location` (if any exist) becomes the active
-location. Selecting a different location from the header dropdown updates
-it. The active location stamps `station_callsign` and
+location. Selecting a different location from the dropdown in the bottom
+status bar updates it. The active location stamps `station_callsign` and
 `station_location_id` onto every newly-logged QSO; if none exist, QSOs
 are logged location-less until the operator creates one.
+
+The bar's **Edit** and **New** buttons open the station editor (until the
+first location exists the bar shows a single **Create station location**
+button instead). It edits every field of a location — name, station and
+owner callsign, grid, city, county, state, country, CQ/ITU zone, IOTA,
+latitude/longitude — and its **TQSL location**, the TQSL station location
+LoTW uploads of its QSOs are signed with:
+
+- With TQSL's `station_data` readable, the TQSL field is a pick list of
+  TQSL's names plus "(none)"; a stored name TQSL no longer has is shown
+  flagged "not found in TQSL". Without it, the field is free text and the
+  editor shows the path it tried.
+- An empty TQSL field is preselected with the TQSL location of exactly the
+  same name, if there is one — stored only when the operator saves.
+- **Fill from TQSL** copies callsign, grid, county, state, zones and IOTA
+  from the chosen TQSL location into the form's *empty* fields (how
+  locations created by ADIF import, which have only a name and callsign,
+  get their details).
+- A warning (not a block) appears when the chosen TQSL location's
+  callsign or grid disagrees with the form's.
 
 > An earlier revision wrapped this in a per-boot `operating_session`
 > entity (start/end/retarget, orphan cleanup, a Sessions pane). It was
@@ -276,19 +296,53 @@ sequence. Each fails independently.
 [lotw]
 username = "W1ABC"
 password = "your-lotw-website-password"
-station_location = "Home"
 tqsl_path = "/usr/bin/tqsl"
+tqsl_station_data = "/home/you/.tqsl/station_data"
 ```
 
 | Field | Required | Default | Notes |
 |---|---|---|---|
 | `username` | for fetch | none | LotW website login (NOT the cert). |
 | `password` | for fetch | none | Plaintext. |
-| `station_location` | for upload | none | TQSL station-location *name*, must exist in your tqsl install. |
 | `tqsl_path` | no | `"tqsl"` (PATH) | Override only if tqsl isn't on PATH. |
+| `tqsl_station_data` | no | `%APPDATA%\TrustedQSL\station_data` (Windows), `~/.tqsl/station_data` (elsewhere) | TQSL's list of station locations, read by the station editor and the upload. Unreadable = "TQSL's list unknown", not an error. The non-Windows default is unverified on real installs; set this if TQSL keeps the file elsewhere. |
+| `station_location` | — | — | **Deprecated, ignored.** Was the one TQSL location every upload was signed with. Still parsed so old files load; a warning is logged at startup when it is set. Set each station location's TQSL location in the station editor instead. |
 
-**Upload path**: ADIF → `tqsl -d -a all -l <name> -x -o out.tq8 in.adi` →
-HTTPS POST `out.tq8` to `lotw.arrl.org/lotw/upload`.
+Upload needs no config beyond TQSL itself: it runs when at least one
+station location has a TQSL location set (that, or `username`/`password`
+for fetch, is what makes LoTW count as configured for Update services).
+
+**Upload path**: pending QSOs are grouped by (station location, station
+callsign), and each group is signed separately:
+`tqsl -d -a compliant -l <location's TQSL location> -c <station callsign> -x -o out.tq8 in.adi`
+→ HTTPS POST `out.tq8` to `lotw.arrl.org/lotw/upload`. `-c` picks the
+certificate for the call the QSOs were made under (e.g. a `/P` from a
+regular location); TQSL refuses if it has no such certificate.
+`-a compliant` makes TQSL skip QSOs it knows were already uploaded or
+fall outside the certificate's dates instead of re-signing them.
+
+Strict mapping — a QSO is never sent to TQSL unless it maps cleanly. It
+is **held back** (left pending, not marked failed) when it has no
+station location, its location has no TQSL location, TQSL's list is
+readable and lacks that name, or it has no station callsign. If TQSL's
+list can't be read at all, a name the operator set is used as is (TQSL
+refuses unknown names itself).
+
+TQSL's result is read from the last `Final Status: Description (Code)`
+line it prints in batch mode, falling back to its exit status: 0 and 9
+(some skipped as already uploaded) → post the .tq8 and mark the group
+uploaded; 8 and 14 with no output file → TQSL says they were already
+uploaded, mark them uploaded without posting; anything else fails that
+group only (its QSOs stay pending) and the description is shown. One
+group failing doesn't stop the others.
+
+Each run signs at most 500 QSOs, chosen *after* held-back QSOs are set
+aside, so unmappable QSOs never crowd out sendable ones; any beyond 500
+go on the next run. The one-line summary gives every count, e.g.
+`upload: 120 uploaded · 14 held back (9 no station location, 5 "Versailles-House" has no TQSL location)`,
+plus "already at LoTW", "more next run" and per-group failures
+(`3 failed ("Home" as N9UNX/P: TQSL: Invalid passphrase (15))`) when
+they apply.
 
 **Fetch path**: GET `lotw.arrl.org/lotwuser/lotwreport.adi` with
 `login=...&password=...&qso_query=1&qso_qsldetail=yes` → ADIF response →

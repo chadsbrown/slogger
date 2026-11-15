@@ -19,7 +19,7 @@ pub use import::{ImportError, ImportOutcome, SkippedRecord, parse_adif};
 pub use my_station::StationLocationRef;
 pub use queries::{LocationFilter, QsoSearch, QsoSummary, SortOrder};
 pub use repository::{
-    AwardQso, DedupKey, ImportBatch, ImportedCredit, ImportedServiceState, QsoDetail,
-    QsoRepository, QsoServiceState, RepoResult, RepositoryError, StationRepository,
+    AwardQso, DedupKey, ImportBatch, ImportedCredit, ImportedServiceState, PendingUploadCount,
+    QsoDetail, QsoRepository, QsoServiceState, RepoResult, RepositoryError, StationRepository,
 };
 pub use service::{BulkReport, ImportReport, LogbookService};

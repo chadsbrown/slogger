@@ -158,15 +158,24 @@
 # [lotw] — ARRL Logbook of the World
 # ----------------------------------------
 #
-# Upload requires TQSL on PATH (or set tqsl_path) plus a station_location
-# defined in tqsl. Fetch verifies (your QSO is at LotW) AND confirms
-# (other station also has matching) in one round-trip.
+# Upload requires TQSL on PATH (or set tqsl_path). Which TQSL station
+# location signs which QSOs is NOT set here: each slogger station location
+# names its own TQSL location (bottom bar -> Edit). QSOs whose location
+# has no TQSL location, or names one TQSL doesn't have, are held back and
+# the upload summary says why. Fetch verifies (your QSO is at LotW) AND
+# confirms (other station also has matching) in one round-trip.
 
 [lotw]
 # username = "W1ABC"               # LotW website login (NOT the cert)
 # password = "your-lotw-website-password"
-# station_location = "Home"        # TQSL station-location *name*
 # tqsl_path = "/usr/bin/tqsl"      # override only if not on PATH
+# tqsl_station_data = "/home/you/.tqsl/station_data"
+#                                  # TQSL's list of station locations; only
+#                                  # needed if TQSL keeps it somewhere other
+#                                  # than ~/.tqsl/station_data (Linux/macOS)
+#                                  # or %APPDATA%\TrustedQSL\station_data
+#                                  # (Windows)
+# station_location = "Home"        # DEPRECATED, ignored (logs a warning)
 
 # ----------------------------------------
 # [eqsl] — eQSL.cc

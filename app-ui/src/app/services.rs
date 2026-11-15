@@ -5,13 +5,15 @@ use chrono::Utc;
 use clublog_sync::{ClubLogConfig as ClubLogClientConfig, ClubLogUploadClient};
 use eqsl_sync::{EqslFetchClient, EqslFetchConfig, EqslUploadClient, EqslUploadConfig};
 use hrdlog_sync::{HrdlogConfig as HrdlogClientConfig, HrdlogUploadClient};
-use logbook_domain::{ExportOptions, QsoRepository, export_adif};
-use lotw_sync::{LotwFetchClient, LotwFetchConfig, LotwUploadClient, LotwUploadConfig};
+use logbook_domain::{ExportOptions, QsoRepository, StationRepository, export_adif};
+use lotw_sync::{LotwFetchClient, LotwFetchConfig};
 use qrz_sync::{QrzConfig as QrzClientConfig, QrzUploadClient};
+use radio_core::StationLocation;
 
 use super::constants::{
     CLUBLOG_SERVICE, EQSL_SERVICE, HRDLOG_SERVICE, LOTW_SERVICE, QRZ_SERVICE,
 };
+use super::lotw_upload;
 use super::message::{
     ClubLogUpdateSummary, EqslUpdateSummary, FetchSummary, HrdlogUpdateSummary,
     MultiUpdateSummary, QrzUpdateSummary, UpdateSummary, UploadSummary,
@@ -22,12 +24,20 @@ use super::message::{
 /// the next phase or the next service.
 pub(super) async fn run_services_update(
     repo: Arc<dyn QsoRepository>,
+    station_repo: Arc<dyn StationRepository>,
     cfg: Config,
 ) -> MultiUpdateSummary {
-    let lotw = if cfg.lotw.is_configured_for_upload() || cfg.lotw.is_configured_for_fetch() {
-        Some(run_lotw_update(repo.clone(), cfg.lotw).await)
-    } else {
-        None
+    let lotw = match station_repo.list_locations().await {
+        Ok(locations)
+            if lotw_upload::upload_configured(&locations) || cfg.lotw.is_configured_for_fetch() =>
+        {
+            Some(run_lotw_update(repo.clone(), &locations, cfg.lotw).await)
+        }
+        Ok(_) => None,
+        Err(e) => Some(UpdateSummary {
+            upload_error: Some(format!("reading station locations: {e}")),
+            ..Default::default()
+        }),
     };
     let eqsl = if cfg.eqsl.is_configured() {
         Some(run_eqsl_update(repo.clone(), cfg.eqsl).await)
@@ -58,72 +68,26 @@ pub(super) async fn run_services_update(
     }
 }
 
-async fn run_lotw_upload(
-    repo: Arc<dyn QsoRepository>,
-    cfg: LotwConfig,
-) -> Result<UploadSummary, String> {
-    let pending = repo
-        .list_pending_uploads(LOTW_SERVICE, Some(500))
-        .await
-        .map_err(|e| e.to_string())?;
-    if pending.is_empty() {
-        return Ok(UploadSummary {
-            uploaded: 0,
-            note: "no pending QSOs".into(),
-        });
-    }
-
-    let adif = export_adif(&pending, &ExportOptions::default());
-
-    let mut upload_cfg = LotwUploadConfig::new(
-        cfg.station_location
-            .clone()
-            .ok_or_else(|| "missing [lotw].station_location".to_string())?,
-    );
-    if let Some(p) = cfg.tqsl_path.clone() {
-        upload_cfg = upload_cfg.with_tqsl_path(p);
-    }
-    let client = LotwUploadClient::new(upload_cfg);
-    let outcome = client.upload_adif(&adif).await.map_err(|e| e.to_string())?;
-
-    let now = Utc::now();
-    let mut marked = 0usize;
-    for qso in &pending {
-        if let Err(e) = repo
-            .mark_uploaded(&qso.id, LOTW_SERVICE, now, None)
-            .await
-        {
-            tracing::warn!(qso_id = %qso.id, error = %e, "failed to mark qso uploaded");
-        } else {
-            marked += 1;
-        }
-    }
-    let note = if outcome.accepted {
-        "accepted by LotW"
-    } else {
-        "uploaded; LotW response unclear — verify in LotW account"
-    };
-    Ok(UploadSummary {
-        uploaded: marked,
-        note: note.into(),
-    })
-}
-
 /// One round-trip to LotW that updates both `upload_state` (to verified)
 /// and `confirmation_state` (where qsl_rcvd=Y). LotW returns every QSO in
 /// our account; presence alone proves the upload landed, and the
 /// `QSL_RCVD` per-record flag tells us whether the other station also has
 /// matching QSOs.
-async fn run_lotw_update(repo: Arc<dyn QsoRepository>, cfg: LotwConfig) -> UpdateSummary {
+async fn run_lotw_update(
+    repo: Arc<dyn QsoRepository>,
+    locations: &[StationLocation],
+    cfg: LotwConfig,
+) -> UpdateSummary {
     let mut summary = UpdateSummary::default();
 
-    if cfg.is_configured_for_upload() {
-        match run_lotw_upload(repo.clone(), cfg.clone()).await {
+    if lotw_upload::upload_configured(locations) {
+        match lotw_upload::run_lotw_upload(repo.clone(), locations, &cfg).await {
             Ok(u) => summary.upload = Some(u),
             Err(e) => summary.upload_error = Some(e),
         }
     } else {
-        summary.upload_skipped_reason = Some("no [lotw].station_location".into());
+        summary.upload_skipped_reason =
+            Some("no station location has a TQSL location set".into());
     }
 
     if cfg.is_configured_for_fetch() {
@@ -511,7 +475,7 @@ pub(super) fn format_multi_summary(s: &MultiUpdateSummary) -> String {
 fn format_lotw_summary(s: &UpdateSummary) -> String {
     let mut parts = Vec::new();
     if let Some(u) = &s.upload {
-        parts.push(format!("upload {} qso ({})", u.uploaded, u.note));
+        parts.push(format!("upload: {}", lotw_upload::format_lotw_upload(u)));
     } else if let Some(e) = &s.upload_error {
         parts.push(format!("upload error: {e}"));
     } else if let Some(r) = &s.upload_skipped_reason {

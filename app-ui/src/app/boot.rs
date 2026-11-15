@@ -45,6 +45,13 @@ pub(super) async fn boot_app() -> Result<BootBundle, String> {
     ));
 
     let config = Config::load_default().map_err(|e| e.to_string())?;
+    if let Some(name) = &config.lotw.station_location {
+        tracing::warn!(
+            station_location = %name,
+            "[lotw] station_location is deprecated and ignored: set each station location's \
+             TQSL location in the station editor instead"
+        );
+    }
 
     let station_locations = station_repo
         .list_locations()
@@ -399,11 +406,19 @@ pub(super) async fn create_qso(
     svc.create_qso(cmd).await.map_err(|e| e.to_string())
 }
 
-pub(super) async fn insert_location(
+/// Writes a location from the station editor: an update when `is_new`
+/// is false, otherwise an insert.
+pub(super) async fn save_location(
     repo: Arc<dyn StationRepository>,
     loc: StationLocation,
+    is_new: bool,
 ) -> Result<StationLocation, String> {
-    repo.insert_location(&loc).await.map_err(|e| e.to_string())?;
+    let result = if is_new {
+        repo.insert_location(&loc).await
+    } else {
+        repo.update_location(&loc).await
+    };
+    result.map_err(|e| e.to_string())?;
     Ok(loc)
 }
 

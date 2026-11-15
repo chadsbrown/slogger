@@ -5,18 +5,21 @@ use chrono::Utc;
 use iced::Task;
 use iced::widget::pane_grid;
 use logbook_domain::{CreateQsoCommand, QsoSearch};
+use lotw_sync::TqslStationData;
 use radio_core::{Band, Callsign, Mode, QsoId, StationLocation, StationLocationId};
 use rig_control::{RigHandle, RigSnapshot};
 use spot_feed::{Spot, SpotEvent};
 use wsjtx_bridge::WsjtxMessage;
 
-use super::boot::{create_qso, import_adif_file, insert_location, refresh};
+use super::boot::{create_qso, import_adif_file, refresh, save_location};
 use super::constants::SPOT_HISTORY_LIMIT;
 use super::helpers::{
     default_freq_for_band, option_from_str, parse_mhz_to_hz, station_call_from_config,
 };
 use super::focus::focus_call;
 use super::layout::{SavedUi, save_layout};
+use super::modals::Modal;
+use super::modals::station::{self, StationEditor, StationEditorMsg};
 use super::theme;
 use super::message::{DupeMatch, LogbookSearchResult, Message};
 use super::panels::Panels;
@@ -390,33 +393,33 @@ impl App {
                 self.refresh_task()
             }
             Message::StationLocationSelected(opt) => self.select_station_location(opt.id),
-            Message::NewLocationNameChanged(s) => {
-                self.new_location_name = s;
-                Task::none()
+            Message::EditStationPressed => {
+                let current = self.active_location.clone();
+                self.open_station_editor(current)
             }
-            Message::NewLocationCallsignChanged(s) => {
-                self.new_location_call = s;
-                Task::none()
+            Message::NewStationPressed => self.open_station_editor(None),
+            Message::StationEditor(msg) => self.station_editor_update(msg),
+            Message::StationSaved(Ok(loc)) => {
+                if matches!(self.modal, Some(Modal::StationEditor(_))) {
+                    self.modal = None;
+                }
+                match self.station_locations.iter_mut().find(|l| l.id == loc.id) {
+                    Some(existing) => *existing = loc.clone(),
+                    None => self.station_locations.push(loc.clone()),
+                }
+                self.station_locations.sort_by(|a, b| a.name.cmp(&b.name));
+                self.status = Some(format!("saved station '{}'", loc.name));
+                let _ = self.select_station_location(loc.id);
+                focus_call()
             }
-            Message::NewLocationGridChanged(s) => {
-                self.new_location_grid = s;
-                Task::none()
-            }
-            Message::CreateLocationPressed => self.create_station_location(),
-            Message::LocationCreated(Ok(loc)) => {
-                self.creating_location = false;
-                self.new_location_name.clear();
-                self.new_location_call.clear();
-                self.new_location_grid.clear();
-                self.station_locations.push(loc.clone());
-                self.station_locations
-                    .sort_by(|a, b| a.name.cmp(&b.name));
-                self.status = Some(format!("created station '{}'", loc.name));
-                self.select_station_location(loc.id)
-            }
-            Message::LocationCreated(Err(e)) => {
-                self.creating_location = false;
-                self.status = Some(format!("create station error: {e}"));
+            Message::StationSaved(Err(e)) => {
+                match &mut self.modal {
+                    Some(Modal::StationEditor(editor)) => {
+                        editor.saving = false;
+                        editor.error = Some(format!("save failed: {e}"));
+                    }
+                    _ => self.status = Some(format!("save station error: {e}")),
+                }
                 Task::none()
             }
             Message::SpotEvent(SpotEvent::Spot(spot)) => {
@@ -1417,59 +1420,58 @@ impl App {
         Task::none()
     }
 
-    fn create_station_location(&mut self) -> Task<Message> {
-        let Some(repo) = self.station_repo.clone() else {
+    /// Opens the station editor on `location` (or a blank one). TQSL's
+    /// location list is re-read on every open — it's a small local file —
+    /// so locations just added in TQSL show up without a restart.
+    fn open_station_editor(&mut self, location: Option<StationLocation>) -> Task<Message> {
+        let path = self
+            .config
+            .as_ref()
+            .and_then(|c| c.lotw.tqsl_station_data.clone());
+        let tqsl = TqslStationData::load(path.as_deref());
+        self.modal = Some(Modal::StationEditor(StationEditor::new(location, tqsl)));
+        iced::widget::operation::focus(iced::widget::Id::new(station::NAME_INPUT_ID))
+    }
+
+    fn station_editor_update(&mut self, msg: StationEditorMsg) -> Task<Message> {
+        let Some(Modal::StationEditor(editor)) = &mut self.modal else {
             return Task::none();
         };
-        let name = self.new_location_name.trim();
-        if name.is_empty() {
-            self.status = Some("station name is required".into());
+        if !matches!(msg, StationEditorMsg::Save) {
+            editor.update(msg);
             return Task::none();
         }
-        let call = match Callsign::parse(&self.new_location_call) {
-            Ok(c) => c,
+        if editor.saving {
+            return Task::none();
+        }
+        let loc = match editor.form.to_location(editor.editing.as_ref(), Utc::now()) {
+            Ok(loc) => loc,
             Err(e) => {
-                self.status = Some(format!("station callsign: {e}"));
+                editor.error = Some(e);
                 return Task::none();
             }
         };
-        let grid = option_from_str(&self.new_location_grid);
-        let now = Utc::now();
-        let loc = StationLocation {
-            id: StationLocationId::new(),
-            name: name.to_string(),
-            station_callsign: Some(call.clone()),
-            owner_callsign: Some(call),
-            city: None,
-            county: None,
-            state: None,
-            country: None,
-            grid,
-            latitude: None,
-            longitude: None,
-            cq_zone: None,
-            itu_zone: None,
-            iota: None,
-            lotw_station_location: None,
-            eqsl_account: None,
-            created_at: now,
-            updated_at: now,
+        let Some(repo) = self.station_repo.clone() else {
+            editor.error = Some("the database isn't open yet".into());
+            return Task::none();
         };
-        self.creating_location = true;
-        self.status = Some(format!("creating station '{}'…", loc.name));
-        Task::perform(insert_location(repo, loc), Message::LocationCreated)
+        editor.error = None;
+        editor.saving = true;
+        let is_new = editor.editing.is_none();
+        Task::perform(save_location(repo, loc, is_new), Message::StationSaved)
     }
 
     fn start_services_update(&mut self) -> Task<Message> {
-        let Some(repo) = self.repo.clone() else {
+        let (Some(repo), Some(station_repo)) = (self.repo.clone(), self.station_repo.clone())
+        else {
             return Task::none();
         };
         let Some(cfg) = self.config.clone() else {
             self.status = Some("config not loaded".into());
             return Task::none();
         };
-        let lotw_configured =
-            cfg.lotw.is_configured_for_upload() || cfg.lotw.is_configured_for_fetch();
+        let lotw_configured = super::lotw_upload::upload_configured(&self.station_locations)
+            || cfg.lotw.is_configured_for_fetch();
         let eqsl_configured = cfg.eqsl.is_configured();
         let clublog_configured = cfg.clublog.is_configured();
         let qrz_configured = cfg.qrz.is_configured();
@@ -1481,8 +1483,8 @@ impl App {
             && !hrdlog_configured
         {
             self.status = Some(
-                "no service configured (need [lotw], [eqsl], [clublog], [qrz], or [hrdlog] \
-                 in config.toml)"
+                "no service configured (set a TQSL location on a station location for LoTW, \
+                 or configure [lotw], [eqsl], [clublog], [qrz] or [hrdlog] in config.toml)"
                     .into(),
             );
             return Task::none();
@@ -1493,7 +1495,7 @@ impl App {
         self.syncing = true;
         self.status = Some("updating services…".into());
         Task::perform(
-            run_services_update(repo, cfg),
+            run_services_update(repo, station_repo, cfg),
             Message::ServicesUpdateFinished,
         )
     }
@@ -1643,6 +1645,78 @@ mod tests {
         let _ = app.update(Message::EscapePressed);
         assert!(app.modal.is_none());
         assert_eq!(app.call_input, "K1ABC", "the form under the modal is untouched");
+    }
+
+    fn open_editor(app: &App) -> &StationEditor {
+        match &app.modal {
+            Some(Modal::StationEditor(editor)) => editor,
+            other => panic!("expected the station editor, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn station_editor_shows_errors_in_the_modal_and_esc_discards_it() {
+        use crate::app::modals::station::Field;
+        let (mut app, _) = App::init();
+        let _ = app.update(Message::NewStationPressed);
+        let _ = app.update(Message::StationEditor(StationEditorMsg::Changed(
+            Field::StationCall,
+            "W1 ABC".into(),
+        )));
+        let _ = app.update(Message::StationEditor(StationEditorMsg::Save));
+        let editor = open_editor(&app);
+        assert!(editor.error.as_deref().unwrap().contains("Name"));
+        assert!(!editor.saving);
+        assert_eq!(editor.form.station_call, "W1 ABC", "typing reaches the modal's fields");
+
+        let _ = app.update(Message::EscapePressed);
+        assert!(app.modal.is_none());
+        assert!(app.station_locations.is_empty());
+    }
+
+    #[test]
+    fn a_saved_station_replaces_its_old_copy_and_becomes_active() {
+        let (mut app, _) = App::init();
+        let now = Utc::now();
+        let old = StationLocation {
+            id: StationLocationId::new(),
+            name: "Home".into(),
+            station_callsign: None,
+            owner_callsign: None,
+            city: None,
+            county: None,
+            state: None,
+            country: None,
+            grid: None,
+            latitude: None,
+            longitude: None,
+            cq_zone: None,
+            itu_zone: None,
+            iota: None,
+            lotw_station_location: None,
+            eqsl_account: None,
+            created_at: now,
+            updated_at: now,
+        };
+        app.station_locations = vec![old.clone()];
+        let _ = app.update(Message::EditStationPressed);
+        assert!(open_editor(&app).editing.is_none(), "no active location: nothing to edit");
+        app.active_location = Some(old.clone());
+        let _ = app.update(Message::EditStationPressed);
+        assert_eq!(open_editor(&app).editing.as_ref().map(|l| l.id), Some(old.id));
+
+        let saved = StationLocation {
+            lotw_station_location: Some("Home QTH".into()),
+            ..old.clone()
+        };
+        let _ = app.update(Message::StationSaved(Ok(saved)));
+        assert!(app.modal.is_none());
+        assert_eq!(app.station_locations.len(), 1);
+        assert_eq!(app.station_locations[0].lotw_station_location.as_deref(), Some("Home QTH"));
+        assert_eq!(
+            app.active_location.as_ref().unwrap().lotw_station_location.as_deref(),
+            Some("Home QTH")
+        );
     }
 
     #[test]

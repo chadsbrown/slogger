@@ -223,9 +223,11 @@ fn describe_last_outcome(app: &App, svc: QslService) -> String {
             Some(s) => {
                 let mut parts = Vec::new();
                 if let Some(u) = &s.upload {
-                    parts.push(format!("up {}: {}", u.uploaded, u.note));
+                    parts.push(format!("up {}", crate::app::lotw_upload::format_lotw_upload(u)));
                 } else if let Some(e) = &s.upload_error {
                     parts.push(format!("up error: {e}"));
+                } else if let Some(r) = &s.upload_skipped_reason {
+                    parts.push(format!("up skipped: {r}"));
                 }
                 if let Some(f) = &s.fetch {
                     parts.push(format!(

@@ -54,10 +54,6 @@ pub struct App {
 
     pub(super) station_locations: Vec<StationLocation>,
     pub(super) active_location: Option<StationLocation>,
-    pub(super) new_location_name: String,
-    pub(super) new_location_call: String,
-    pub(super) new_location_grid: String,
-    pub(super) creating_location: bool,
 
     pub(super) recent: Vec<QsoSummary>,
     pub(super) pending_lotw: usize,
@@ -196,10 +192,6 @@ impl App {
             entry_draft: None,
             station_locations: vec![],
             active_location: None,
-            new_location_name: String::new(),
-            new_location_call: String::new(),
-            new_location_grid: String::new(),
-            creating_location: false,
             recent: vec![],
             pending_lotw: 0,
             pending_eqsl: 0,

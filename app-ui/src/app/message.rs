@@ -30,11 +30,14 @@ pub enum Message {
     ServicesUpdatePressed,
     ServicesUpdateFinished(MultiUpdateSummary),
     StationLocationSelected(StationOption),
-    NewLocationNameChanged(String),
-    NewLocationCallsignChanged(String),
-    NewLocationGridChanged(String),
-    CreateLocationPressed,
-    LocationCreated(Result<StationLocation, String>),
+    /// Open the station editor on the active location.
+    EditStationPressed,
+    /// Open the station editor on a new, empty location.
+    NewStationPressed,
+    /// Input to the open station editor.
+    StationEditor(super::modals::station::StationEditorMsg),
+    /// A location saved from the editor: inserted (new) or updated.
+    StationSaved(Result<StationLocation, String>),
     SpotEvent(SpotEvent),
     SpotClicked(spot_feed::Spot),
     ToggleSpotsNeededOnly,
@@ -231,9 +234,10 @@ pub struct FetchSummary {
     pub unmatched: usize,
 }
 
+/// LoTW's part of a services update.
 #[derive(Debug, Clone, Default)]
 pub struct UpdateSummary {
-    pub upload: Option<UploadSummary>,
+    pub upload: Option<super::lotw_upload::LotwUploadSummary>,
     pub upload_error: Option<String>,
     pub upload_skipped_reason: Option<String>,
     pub fetch: Option<FetchSummary>,

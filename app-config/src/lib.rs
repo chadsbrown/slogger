@@ -337,18 +337,22 @@ pub struct LotwConfig {
     pub username: Option<String>,
     /// LotW website password. **Plaintext.** Future: opt-in OS keyring.
     pub password: Option<String>,
-    /// TQSL station-location *name* — must match a location defined inside
-    /// the user's tqsl install. This is what tqsl signs against.
+    /// **Deprecated; ignored.** Once the one TQSL station location every
+    /// upload was signed with. Each slogger station location now names
+    /// its own TQSL location (set in the station editor), so QSOs from a
+    /// second QTH are signed with that QTH's details. Still parsed so
+    /// existing config files load; slogger logs a warning when it is set.
     pub station_location: Option<String>,
     /// Path to the tqsl binary. Defaults to whatever's on PATH.
     pub tqsl_path: Option<PathBuf>,
+    /// Path to TQSL's `station_data` file, the list of TQSL station
+    /// locations. Defaults to `%APPDATA%\TrustedQSL\station_data` on
+    /// Windows and `~/.tqsl/station_data` elsewhere; set this when TQSL
+    /// keeps it somewhere else.
+    pub tqsl_station_data: Option<PathBuf>,
 }
 
 impl LotwConfig {
-    pub fn is_configured_for_upload(&self) -> bool {
-        self.station_location.is_some()
-    }
-
     pub fn is_configured_for_fetch(&self) -> bool {
         self.username.is_some() && self.password.is_some()
     }
@@ -392,7 +396,7 @@ impl Config {
                 error: e.to_string(),
             })?;
         }
-        let text = "# slogger config\n\n[station]\n# default_callsign = \"W1ABC\"\n\n[lotw]\n# username = \"W1ABC\"\n# password = \"\"\n# station_location = \"Home\"\n# tqsl_path = \"/usr/bin/tqsl\"\n\n[eqsl]\n# username = \"W1ABC\"\n# password = \"\"\n\n[clublog]\n# email = \"you@example.com\"\n# password = \"\"\n# callsign = \"W1ABC\"\n\n[qrz]\n# api_key = \"YOUR-KEY-FROM-QRZ-LOGBOOK\"\n\n[hrdlog]\n# callsign = \"W1ABC\"\n# code = \"YOUR-HRDLOG-UPLOAD-CODE\"\n\n[dxcluster]\n# my_callsign = \"W1ABC\"\n# sources = [\n#     { host = \"dxc.kbx.org\", port = 7300 },\n# ]\n\n[wsjtx]\n# enabled = true\n# bind_addr = \"127.0.0.1:2237\"\n\n[[rig]]\n# enabled = true\n# vendor = \"icom\"  # icom / yaesu / kenwood / elecraft / flex\n# model = \"IC-7300\"\n# serial_port = \"/dev/ttyUSB0\"  # for serial vendors\n# baud_rate = 115200\n# host = \"192.168.1.50\"  # for flex (instead of serial_port)\n# label = \"Main\"           # optional friendly name for multi-rig setups\n\n# Add another [[rig]] block for a second radio (SO2R / parallel ops).\n\n[keyer]\n# enabled = true\n# serial_port = \"/dev/ttyUSB1\"\n# initial_wpm = 25\n\n[so2r]\n# enabled = true\n# serial_port = \"/dev/ttyUSB2\"\n# initial_tx = 1                    # 1 or 2\n# initial_rx_mode = \"stereo\"        # mono / stereo / reverse_stereo\n";
+        let text = "# slogger config\n\n[station]\n# default_callsign = \"W1ABC\"\n\n[lotw]\n# username = \"W1ABC\"\n# password = \"\"\n# tqsl_path = \"/usr/bin/tqsl\"\n# tqsl_station_data = \"/home/you/.tqsl/station_data\"\n\n[eqsl]\n# username = \"W1ABC\"\n# password = \"\"\n\n[clublog]\n# email = \"you@example.com\"\n# password = \"\"\n# callsign = \"W1ABC\"\n\n[qrz]\n# api_key = \"YOUR-KEY-FROM-QRZ-LOGBOOK\"\n\n[hrdlog]\n# callsign = \"W1ABC\"\n# code = \"YOUR-HRDLOG-UPLOAD-CODE\"\n\n[dxcluster]\n# my_callsign = \"W1ABC\"\n# sources = [\n#     { host = \"dxc.kbx.org\", port = 7300 },\n# ]\n\n[wsjtx]\n# enabled = true\n# bind_addr = \"127.0.0.1:2237\"\n\n[[rig]]\n# enabled = true\n# vendor = \"icom\"  # icom / yaesu / kenwood / elecraft / flex\n# model = \"IC-7300\"\n# serial_port = \"/dev/ttyUSB0\"  # for serial vendors\n# baud_rate = 115200\n# host = \"192.168.1.50\"  # for flex (instead of serial_port)\n# label = \"Main\"           # optional friendly name for multi-rig setups\n\n# Add another [[rig]] block for a second radio (SO2R / parallel ops).\n\n[keyer]\n# enabled = true\n# serial_port = \"/dev/ttyUSB1\"\n# initial_wpm = 25\n\n[so2r]\n# enabled = true\n# serial_port = \"/dev/ttyUSB2\"\n# initial_tx = 1                    # 1 or 2\n# initial_rx_mode = \"stereo\"        # mono / stereo / reverse_stereo\n";
         std::fs::write(path, text).map_err(|e| ConfigError::Io {
             path: path.to_path_buf(),
             error: e.to_string(),
@@ -410,7 +414,6 @@ mod tests {
         let dir = tempdir().unwrap();
         let path = dir.path().join("absent.toml");
         let cfg = Config::load_from(&path).unwrap();
-        assert!(!cfg.lotw.is_configured_for_upload());
         assert!(!cfg.lotw.is_configured_for_fetch());
     }
 
@@ -420,14 +423,26 @@ mod tests {
         let path = dir.path().join("config.toml");
         std::fs::write(
             &path,
-            "[lotw]\nusername = \"W1ABC\"\npassword = \"hunter2\"\nstation_location = \"Home\"\n",
+            "[lotw]\nusername = \"W1ABC\"\npassword = \"hunter2\"\n\
+             tqsl_station_data = \"/tmp/station_data\"\n",
         )
         .unwrap();
         let cfg = Config::load_from(&path).unwrap();
         assert_eq!(cfg.lotw.username.as_deref(), Some("W1ABC"));
-        assert_eq!(cfg.lotw.station_location.as_deref(), Some("Home"));
-        assert!(cfg.lotw.is_configured_for_upload());
+        assert_eq!(
+            cfg.lotw.tqsl_station_data.as_deref(),
+            Some(Path::new("/tmp/station_data"))
+        );
         assert!(cfg.lotw.is_configured_for_fetch());
+    }
+
+    #[test]
+    fn deprecated_lotw_station_location_still_loads() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[lotw]\nstation_location = \"Home\"\n").unwrap();
+        let cfg = Config::load_from(&path).unwrap();
+        assert_eq!(cfg.lotw.station_location.as_deref(), Some("Home"));
     }
 
     #[test]
@@ -604,7 +619,7 @@ mod tests {
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(text.contains("[lotw]"));
         let cfg = Config::load_from(&path).unwrap();
-        assert!(!cfg.lotw.is_configured_for_upload());
+        assert!(!cfg.lotw.is_configured_for_fetch());
     }
 
     #[test]

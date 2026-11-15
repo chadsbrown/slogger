@@ -4,6 +4,7 @@ mod drawers;
 mod focus;
 mod helpers;
 mod layout;
+mod lotw_upload;
 mod message;
 mod modals;
 mod panels;

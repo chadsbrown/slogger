@@ -3,3 +3,6 @@
 # ADIF logs hold other operators' names, addresses and email — never commit.
 *.adi
 *.adif
+
+# A copy of TQSL's station location file, kept here for reference only.
+/station_data

@@ -4,8 +4,9 @@ use sqlx::{Row, SqlitePool};
 use uuid::Uuid;
 
 use logbook_domain::{
-    AwardCredit, AwardQso, CreditStatus, DedupKey, ImportBatch, LocationFilter, QsoRepository,
-    QsoSearch, QsoServiceState, QsoSummary, RepoResult, RepositoryError,
+    AwardCredit, AwardQso, CreditStatus, DedupKey, ImportBatch, LocationFilter,
+    PendingUploadCount, QsoRepository, QsoSearch, QsoServiceState, QsoSummary, RepoResult,
+    RepositoryError,
 };
 use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
@@ -745,6 +746,72 @@ impl QsoRepository for SqliteQsoRepository {
         let rows = sqlx::query(sql)
             .bind(service)
             .bind(limit as i64)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(map_err)?;
+        rows.iter().map(row_to_qso).collect()
+    }
+
+    async fn count_pending_uploads_by_location(
+        &self,
+        service: &str,
+    ) -> RepoResult<Vec<PendingUploadCount>> {
+        let sql = "SELECT q.station_location_id AS location,
+                (q.station_callsign IS NOT NULL AND q.station_callsign <> '') AS has_call,
+                COUNT(*) AS n
+            FROM qsos q
+            LEFT JOIN qso_service_state s ON s.qso_id = q.id AND s.service = ?
+            WHERE q.deleted_at IS NULL
+              AND (s.id IS NULL OR s.upload_state IN ('pending', 'failed'))
+            GROUP BY location, has_call";
+        let rows = sqlx::query(sql)
+            .bind(service)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(map_err)?;
+        rows.iter()
+            .map(|row| {
+                let location: Option<String> = row.try_get("location").map_err(map_err)?;
+                let has_call: bool = row.try_get("has_call").map_err(map_err)?;
+                let n: i64 = row.try_get("n").map_err(map_err)?;
+                Ok(PendingUploadCount {
+                    station_location_id: location
+                        .as_deref()
+                        .map(|s| parse_uuid(s).map(StationLocationId::from_uuid))
+                        .transpose()?,
+                    has_station_callsign: has_call,
+                    count: n as usize,
+                })
+            })
+            .collect()
+    }
+
+    async fn list_pending_uploads_at(
+        &self,
+        service: &str,
+        locations: &[StationLocationId],
+        limit: Option<u32>,
+    ) -> RepoResult<Vec<Qso>> {
+        if locations.is_empty() {
+            return Ok(Vec::new());
+        }
+        let placeholders = vec!["?"; locations.len()].join(", ");
+        let sql = format!(
+            "SELECT q.* FROM qsos q
+            LEFT JOIN qso_service_state s ON s.qso_id = q.id AND s.service = ?
+            WHERE q.deleted_at IS NULL
+              AND (s.id IS NULL OR s.upload_state IN ('pending', 'failed'))
+              AND q.station_location_id IN ({placeholders})
+              AND q.station_callsign IS NOT NULL AND q.station_callsign <> ''
+            ORDER BY q.qso_begin DESC
+            LIMIT ?"
+        );
+        let mut query = sqlx::query(&sql).bind(service);
+        for id in locations {
+            query = query.bind(fmt_id(id.as_uuid()));
+        }
+        let rows = query
+            .bind(limit.unwrap_or(500) as i64)
             .fetch_all(&self.pool)
             .await
             .map_err(map_err)?;
@@ -2195,6 +2262,53 @@ Japan:                              25:  45:  AS:   36.24: -139.00:    -9.0:  JA
         };
         let report = svc.bulk_assign_location_by_search(narrowed, home.id).await.unwrap();
         assert_eq!(report.matched, 1);
+    }
+
+    #[tokio::test]
+    async fn pending_uploads_can_be_counted_by_location_and_listed_for_some_locations() {
+        let (svc, db) = fresh_service_with_db().await;
+        let qth = |n: &str| f("APP_DXKEEPER_MY_QTHID", n);
+        let adif = [
+            rec("W1AA", "20240101", "120000", &qth("Home")),
+            rec("W1AB", "20240102", "120000", &qth("Home")),
+            rec("W1AC", "20240103", "120000", &qth("Home")),
+            rec("W1AD", "20240104", "120000", &qth("Portable")),
+            rec("W1AE", "20240105", "120000", ""),
+        ]
+        .concat();
+        import_text(&svc, &adif).await;
+        sqlx::query("UPDATE qsos SET station_callsign = NULL WHERE call = 'W1AC'")
+            .execute(db.pool())
+            .await
+            .unwrap();
+        let repo = SqliteQsoRepository::new(&db);
+        let locations = SqliteStationRepository::new(&db).list_locations().await.unwrap();
+        let id_of = |name: &str| locations.iter().find(|l| l.name == name).unwrap().id;
+        let (home, portable) = (id_of("Home"), id_of("Portable"));
+
+        let mut counts = repo.count_pending_uploads_by_location("lotw").await.unwrap();
+        counts.sort_by_key(|c| (c.station_location_id.map(|i| i.as_uuid()), c.has_station_callsign));
+        let mut expected = vec![
+            PendingUploadCount { station_location_id: None, has_station_callsign: true, count: 1 },
+            PendingUploadCount { station_location_id: Some(home), has_station_callsign: false, count: 1 },
+            PendingUploadCount { station_location_id: Some(home), has_station_callsign: true, count: 2 },
+            PendingUploadCount { station_location_id: Some(portable), has_station_callsign: true, count: 1 },
+        ];
+        expected.sort_by_key(|c| (c.station_location_id.map(|i| i.as_uuid()), c.has_station_callsign));
+        assert_eq!(counts, expected);
+
+        // Only Home's QSOs with a station callsign, newest first, limit
+        // applied after that selection.
+        let at_home = repo.list_pending_uploads_at("lotw", &[home], Some(1)).await.unwrap();
+        assert_eq!(at_home.len(), 1);
+        assert_eq!(at_home[0].call.as_str(), "W1AB");
+        let both = repo.list_pending_uploads_at("lotw", &[home, portable], None).await.unwrap();
+        assert_eq!(both.len(), 3);
+
+        repo.mark_uploaded(&at_home[0].id, "lotw", Utc::now(), None).await.unwrap();
+        let at_home = repo.list_pending_uploads_at("lotw", &[home], None).await.unwrap();
+        assert_eq!(at_home.iter().map(|q| q.call.as_str()).collect::<Vec<_>>(), ["W1AA"]);
+        assert!(repo.list_pending_uploads_at("lotw", &[], None).await.unwrap().is_empty());
     }
 
     #[tokio::test]

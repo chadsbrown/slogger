@@ -8,6 +8,7 @@ authors.workspace = true
 [dependencies]
 adif_parser.workspace = true
 chrono.workspace = true
+dirs.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 thiserror.workspace = true

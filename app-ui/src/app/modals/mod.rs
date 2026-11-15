@@ -5,11 +5,13 @@
 //! 1. add a variant to [`Modal`] (carrying whatever state it needs);
 //! 2. write its `view` in a submodule, wrapping the content in [`frame`];
 //! 3. add an arm for it in [`view`];
-//! 4. open it with `Message::OpenModal(Modal::…)`.
+//! 4. open it with `Message::OpenModal(Modal::…)`, or with a message of
+//!    its own when building its state needs the app (the station editor).
 //!
-//! Closing is handled here for every modal: the × button, a click on the
-//! backdrop, or Esc.
+//! Closing is handled here for every modal: the × button, Esc, and (for
+//! modals that hold nothing to lose) a click on the backdrop.
 
+pub(super) mod station;
 pub(super) mod theme;
 
 use iced::widget::{Space, button, column, container, mouse_area, row, rule, stack, text};
@@ -22,6 +24,19 @@ use super::state::App;
 #[derive(Debug, Clone)]
 pub enum Modal {
     ThemePicker,
+    StationEditor(station::StationEditor),
+}
+
+impl Modal {
+    /// Whether a click outside the modal dismisses it. True for pickers,
+    /// where nothing is lost; false for forms, where a stray click would
+    /// throw away what the operator typed (× and Esc still close them).
+    fn closes_on_backdrop_click(&self) -> bool {
+        match self {
+            Modal::ThemePicker => true,
+            Modal::StationEditor(_) => false,
+        }
+    }
 }
 
 /// Lays `modal` over `main`: a dimming backdrop that closes the modal
@@ -41,13 +56,18 @@ pub(super) fn overlay<'a>(
                 ..container::Style::default()
             }),
     )
-    .on_press(Message::CloseModal);
+    .on_press(if modal.closes_on_backdrop_click() {
+        Message::CloseModal
+    } else {
+        Message::ModalClicked
+    });
     stack![main, backdrop, view(app, modal)].into()
 }
 
 fn view<'a>(app: &'a App, modal: &'a Modal) -> Element<'a, Message> {
     match modal {
         Modal::ThemePicker => theme::view(&app.theme),
+        Modal::StationEditor(editor) => station::view(editor),
     }
 }
 
