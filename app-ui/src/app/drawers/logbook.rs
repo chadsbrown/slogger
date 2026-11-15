@@ -12,7 +12,10 @@ use iced::widget::{
 };
 use iced::{Element, Length};
 use chrono::{DateTime, Utc};
-use logbook_domain::{CreditStatus, LocationFilter, QsoDetail, QsoSearch, QsoSummary};
+use logbook_domain::{
+    CreditStatus, LocationFilter, QsoDetail, QsoSearch, QsoSummary, ServiceDetail,
+    service_details,
+};
 use radio_core::{Band, Mode, PropagationMode, QsoId, StationLocation};
 
 use crate::app::constants::{BANDS, modes};
@@ -21,21 +24,25 @@ use crate::app::state::App;
 use crate::app::theme;
 use crate::app::types::StationOption;
 
-/// Tri-state filter for the `lotw_confirmed` field on `QsoSearch`.
+/// LoTW filter: the `lotw_confirmed` tri-state on `QsoSearch`, plus the
+/// confirmed QSOs whose LoTW detail differs from the log
+/// (`differs_from_lotw`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LotwFilter {
     #[default]
     Any,
     Confirmed,
     Unconfirmed,
+    DiffersFromLotw,
 }
 
 impl LotwFilter {
-    pub(crate) fn as_search_filter(self) -> Option<bool> {
+    pub(crate) fn apply(self, search: &mut QsoSearch) {
         match self {
-            LotwFilter::Any => None,
-            LotwFilter::Confirmed => Some(true),
-            LotwFilter::Unconfirmed => Some(false),
+            LotwFilter::Any => {}
+            LotwFilter::Confirmed => search.lotw_confirmed = Some(true),
+            LotwFilter::Unconfirmed => search.lotw_confirmed = Some(false),
+            LotwFilter::DiffersFromLotw => search.differs_from_lotw = true,
         }
     }
 }
@@ -46,6 +53,7 @@ impl std::fmt::Display for LotwFilter {
             LotwFilter::Any => "Any",
             LotwFilter::Confirmed => "Confirmed",
             LotwFilter::Unconfirmed => "Unconfirmed",
+            LotwFilter::DiffersFromLotw => "Differs from LoTW",
         })
     }
 }
@@ -54,6 +62,7 @@ const LOTW_FILTER_OPTIONS: &[LotwFilter] = &[
     LotwFilter::Any,
     LotwFilter::Confirmed,
     LotwFilter::Unconfirmed,
+    LotwFilter::DiffersFromLotw,
 ];
 
 /// Option wrapper for Band so the pick_list can offer "Any" as a value.
@@ -222,7 +231,7 @@ impl App {
                     Some(state.lotw_filter),
                     Message::LogbookLotwFilterChanged,
                 )
-                .width(Length::Fixed(140.0)),
+                .width(Length::Fixed(170.0)),
                 text("Location:").width(Length::Fixed(60.0)),
                 pick_list(
                     location_filter_options(&self.station_locations),
@@ -633,6 +642,22 @@ fn detail_sections(detail: &QsoDetail, locations: &[StationLocation]) -> Vec<Det
         })
         .collect();
 
+    // What the other station told LoTW, where it filled a blank here or
+    // disagrees with what the log holds.
+    let from_lotw = service_details("lotw", q, &detail.provenance)
+        .into_iter()
+        .map(|(field, d)| {
+            let value = match d {
+                ServiceDetail::Filled { value } => value,
+                ServiceDetail::Differs { reported, local } => format!(
+                    "LoTW says {reported}, log has {}",
+                    local.as_deref().unwrap_or("nothing")
+                ),
+            };
+            (field.adif_name().to_string(), value)
+        })
+        .collect();
+
     let mut record = Vec::new();
     push(&mut record, "Created", Some(timestamp(q.created_at)));
     push(&mut record, "Updated", Some(timestamp(q.updated_at)));
@@ -647,6 +672,7 @@ fn detail_sections(detail: &QsoDetail, locations: &[StationLocation]) -> Vec<Det
         ("MY STATION", station),
         ("QSL", qsl),
         ("AWARD CREDIT", credit),
+        ("FROM LOTW", from_lotw),
         ("OTHER FIELDS", other),
         ("RECORD", record),
     ]
@@ -729,6 +755,7 @@ mod tests {
             exchange_fields: Vec::new(),
             service_states: Vec::new(),
             credits: Vec::new(),
+            provenance: Vec::new(),
         }
     }
 
@@ -758,6 +785,7 @@ mod tests {
                 last_error: None,
             }],
             credits: Vec::new(),
+            provenance: Vec::new(),
         };
 
         let sections = detail_sections(&detail, &[]);
@@ -772,6 +800,7 @@ mod tests {
         assert!(section(&sections, "OPERATOR").is_empty());
         assert!(section(&sections, "CONTEST").is_empty());
         assert!(section(&sections, "AWARD CREDIT").is_empty());
+        assert!(section(&sections, "FROM LOTW").is_empty());
         assert_eq!(
             section(&sections, "QSL"),
             [("LoTW".to_string(), "verified  ·  confirmed 2026-05-09".to_string())]
@@ -847,5 +876,52 @@ mod tests {
                 ("WAS".to_string(), "submitted".to_string()),
             ]
         );
+    }
+
+    #[test]
+    fn detail_shows_what_lotw_filled_and_where_it_differs() {
+        use logbook_domain::FieldProvenance;
+        let begin = Utc.with_ymd_and_hms(2026, 5, 8, 18, 30, 0).unwrap();
+        let mut detail = detail_of(Qso {
+            state: Some("IL".into()),
+            county: Some("IN,Marion".into()),
+            cq_zone: Some(4),
+            ..bare_qso(begin)
+        });
+        let row = |field: &str, source: FieldSource, value: &str| FieldProvenance {
+            field_name: field.into(),
+            source,
+            source_detail: Some(value.into()),
+            created_at: begin,
+        };
+        let lotw = || "lotw".to_string();
+        detail.provenance = vec![
+            row("CNTY", FieldSource::ServiceSync(lotw()), "IN,Marion"),
+            row("STATE", FieldSource::ServiceDiffers(lotw()), "IN"),
+            row("ITUZ", FieldSource::ServiceDiffers(lotw()), "8"),
+            // Another service's row isn't LoTW's.
+            row("CQZ", FieldSource::ServiceDiffers("eqsl".into()), "5"),
+        ];
+        let sections = detail_sections(&detail, &[]);
+        assert_eq!(
+            section(&sections, "FROM LOTW"),
+            [
+                ("ITUZ".to_string(), "LoTW says 8, log has nothing".to_string()),
+                ("STATE".to_string(), "LoTW says IN, log has IL".to_string()),
+                ("CNTY".to_string(), "IN,Marion".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn lotw_filter_sets_the_search() {
+        let mut s = QsoSearch::default();
+        LotwFilter::DiffersFromLotw.apply(&mut s);
+        assert!(s.differs_from_lotw);
+        assert_eq!(s.lotw_confirmed, None);
+        let mut s = QsoSearch::default();
+        LotwFilter::Unconfirmed.apply(&mut s);
+        assert_eq!(s.lotw_confirmed, Some(false));
+        assert!(!s.differs_from_lotw);
     }
 }

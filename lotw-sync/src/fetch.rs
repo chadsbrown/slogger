@@ -17,6 +17,24 @@ const DEFAULT_REPORT_URL: &str = "https://lotw.arrl.org/lotwuser/lotwreport.adi"
 /// be asked for with an explicit early date.
 pub const SINCE_BEGINNING: &str = "1900-01-01";
 
+/// The confirming station's location fields a `qso_qsldetail=yes`
+/// confirmation carries, when that station gave LoTW a valid value
+/// (`DXCC` and `PFX` always). The ones slogger has a QSO column for; see
+/// `logbook_domain::qsl_detail::DetailField`, which reads them.
+/// `COUNTRY`, `VUCC_GRIDS`, `APP_LoTW_NPSUNIT` and the
+/// `APP_LoTW_*_UserInvalid` zones are not among them.
+pub const QSL_DETAIL_FIELDS: [&str; 9] = [
+    "DXCC",
+    "CONT",
+    "CQZ",
+    "ITUZ",
+    "IOTA",
+    "GRIDSQUARE",
+    "STATE",
+    "CNTY",
+    "PFX",
+];
+
 /// Longest error text taken from an LoTW error page; the rest is cut so a
 /// status line stays one line.
 const MAX_ERROR_LEN: usize = 160;
@@ -140,10 +158,15 @@ pub struct LotwRecord {
     /// enumeration is not read.
     pub credit_granted: Option<String>,
     pub credit_submitted: Option<String>,
-    /// The QSLing station's details (`qso_qsldetail=yes`).
+    /// The QSLing station's details (`qso_qsldetail=yes`), as award
+    /// credit units: upper-cased.
     pub dxcc: Option<u16>,
     pub state: Option<String>,
     pub gridsquare: Option<String>,
+    /// The same station's `QSL_DETAIL_FIELDS`, (name, value) with the
+    /// value only trimmed, so they can be stored the way an ADIF import
+    /// would store them.
+    pub qsl_detail: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -383,6 +406,10 @@ fn to_record(f: &[(String, String)]) -> Option<LotwRecord> {
         dxcc: lookup(f, "DXCC").and_then(|v| v.trim().parse().ok()),
         state: upper("STATE"),
         gridsquare: upper("GRIDSQUARE"),
+        qsl_detail: QSL_DETAIL_FIELDS
+            .iter()
+            .filter_map(|&name| lookup(f, name).map(|v| (name.to_string(), v.trim().to_string())))
+            .collect(),
     })
 }
 
@@ -488,6 +515,8 @@ mod tests {
         <APP_LoTW_MODEGROUP:4>DATA<QSO_DATE:8>20260508<TIME_ON:6>183045\
         <APP_LoTW_QSO_TIMESTAMP:20>2026-05-08T18:30:45Z<QSL_RCVD:1>Y<QSLRDATE:8>20260510\
         <APP_LoTW_RXQSL:19>2026-05-10 12:00:01<DXCC:3>291<STATE:2>CT<GRIDSQUARE:6>FN31pr\
+        <COUNTRY:24>UNITED STATES OF AMERICA<APP_LoTW_DXCC_ENTITY_STATUS:7>Current<PFX:2>W1\
+        <CONT:2>NA<ITUZ:2>08<CNTY:11>CT,Hartford<APP_LoTW_CQZ_UserInvalid:2>99\
         <CREDIT_GRANTED:9>DXCC:LOTW<CREDIT_SUBMITTED:13>WAS:LOTW,DXCC<APP_LoTW_CREDIT_GRANTED:4>DXCC\n\
         <eor>\n\
         <STATION_CALLSIGN:5>K1ABC<CALL:6>JA1NUT<BAND:3>40M<MODE:2>CW<QSO_DATE:8>20260508\
@@ -540,6 +569,25 @@ mod tests {
         assert_eq!(a.dxcc, Some(291));
         assert_eq!(a.state.as_deref(), Some("CT"));
         assert_eq!(a.gridsquare.as_deref(), Some("FN31PR"));
+        // Detail as sent, in the documented field order; the invalid zone
+        // LoTW flags (no CQZ) isn't detail.
+        let detail: Vec<(&str, &str)> = a
+            .qsl_detail
+            .iter()
+            .map(|(n, v)| (n.as_str(), v.as_str()))
+            .collect();
+        assert_eq!(
+            detail,
+            [
+                ("DXCC", "291"),
+                ("CONT", "NA"),
+                ("ITUZ", "08"),
+                ("GRIDSQUARE", "FN31pr"),
+                ("STATE", "CT"),
+                ("CNTY", "CT,Hartford"),
+                ("PFX", "W1"),
+            ]
+        );
 
         // HHMM time; no QSLRDATE, so the receive time stands in.
         let b = &r.records[1];

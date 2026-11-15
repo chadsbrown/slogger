@@ -1059,16 +1059,17 @@ impl App {
             Some(state.call_prefix.trim().to_string())
         };
         let exact_call = Callsign::parse(state.exact_call.trim()).ok();
-        QsoSearch {
+        let mut search = QsoSearch {
             call_prefix,
             exact_call,
             band: state.band.0,
             mode: state.mode.0.clone(),
-            lotw_confirmed: state.lotw_filter.as_search_filter(),
             station_location: state.location_filter.filter,
             limit: Some(500),
             ..Default::default()
-        }
+        };
+        state.lotw_filter.apply(&mut search);
+        search
     }
 
     /// Refreshes the Pending QSOs list in the QSL view from

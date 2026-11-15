@@ -1,10 +1,12 @@
 //! Applying a QSL service's report of our QSOs to the log (LoTW today).
 //!
 //! Each record is matched to the local QSO it describes, then turned into
-//! state changes (upload verified, confirmed) and award credit. Matching
-//! and planning are pure; `apply_report` wraps them with the two bulk
-//! loads and the one batched write they need, so a report of tens of
-//! thousands of records costs a handful of queries, not one per record.
+//! state changes (upload verified, confirmed), award credit, and — from a
+//! confirmation's detail about the other station — location fields filled
+//! in or differences recorded (see `qsl_detail`). Matching and planning
+//! are pure; `apply_report` wraps them with the bulk loads and the one
+//! batched write they need, so a report of tens of thousands of records
+//! costs a handful of queries, not one per record.
 
 use std::collections::HashMap;
 
@@ -13,6 +15,7 @@ use chrono::{DateTime, Utc};
 use radio_core::QsoId;
 
 use crate::credit::{AwardCredit, CreditStatus};
+use crate::qsl_detail::{DetailField, FieldProvenance, plan_detail};
 use crate::repository::{
     CreditUpgrade, ImportedCredit, QsoRepository, RepoResult, SyncBatch, SyncCandidate,
     SyncStateChange, SyncWatermark,
@@ -57,6 +60,12 @@ pub struct ServiceQso {
     pub dxcc_id: Option<u16>,
     pub state: Option<String>,
     pub grid: Option<String>,
+    /// What the confirming station told the service about its location
+    /// (LoTW's `DXCC`, `CONT`, `CQZ`, …), raw. Only used when the record
+    /// is a confirmation; normalised by `qsl_detail::normalize`. Empty
+    /// when the report wasn't asked for detail — LoTW always sends `DXCC`
+    /// and `PFX` when it was — so then the stored detail is left alone.
+    pub detail: Vec<(DetailField, String)>,
 }
 
 /// What applying one report did.
@@ -68,6 +77,12 @@ pub struct SyncOutcome {
     pub newly_confirmed: usize,
     /// Award credits added, or raised from submitted to granted.
     pub credits_changed: usize,
+    /// QSOs with at least one location field filled in (or a grid made
+    /// more precise) from the service.
+    pub qsos_filled: usize,
+    /// QSOs where a difference from the service was newly recorded, or
+    /// the service's differing value changed.
+    pub qsos_differing: usize,
     /// Indexes into the report of records that match no QSO in the log —
     /// expected for QSOs uploaded from elsewhere.
     pub not_in_log: Vec<usize>,
@@ -171,7 +186,8 @@ pub fn match_records(records: &[ServiceQso], candidates: &[SyncCandidate]) -> Ve
 }
 
 /// The batch that brings the log in line with a report, given what
-/// `match_records` paired up and the credit already on the matched QSOs.
+/// `match_records` paired up, and the credit and service provenance rows
+/// already on the matched QSOs.
 ///
 /// Only what changes is written: a QSO already verified (and confirmed,
 /// if the record says so) gets no row, so re-reading a record — as every
@@ -185,6 +201,7 @@ pub fn plan_sync(
     candidates: &[SyncCandidate],
     matches: &[Option<usize>],
     existing_credits: &HashMap<QsoId, Vec<AwardCredit>>,
+    existing_provenance: &HashMap<QsoId, Vec<FieldProvenance>>,
     watermark: Option<SyncWatermark>,
     now: DateTime<Utc>,
 ) -> (SyncBatch, SyncOutcome) {
@@ -217,6 +234,22 @@ pub fn plan_sync(
                 .map(Vec::as_slice)
                 .unwrap_or(&[]);
             plan_credits(r, c, existing, &mut batch, &mut outcome);
+        }
+        // Only a record that carries detail says anything about it: the
+        // uploads report also lists confirmed QSOs, without detail (it
+        // isn't asked for), and must not read as LoTW withdrawing it.
+        if r.confirmed && !r.detail.is_empty() {
+            let rows = existing_provenance
+                .get(&c.qso_id)
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
+            let detail = plan_detail(service, c.qso_id, &c.detail, &r.detail, rows);
+            outcome.qsos_differing += usize::from(detail.new_difference);
+            if let Some(fill) = detail.fill {
+                outcome.qsos_filled += 1;
+                batch.detail_fills.push(fill);
+            }
+            batch.provenance.extend(detail.provenance);
         }
     }
     (batch, outcome)
@@ -265,9 +298,9 @@ fn plan_credits(
         }
         let unit = credit_unit(
             &credit.award,
-            r.dxcc_id.or(c.dxcc_id),
-            r.state.as_deref().or(c.state.as_deref()),
-            r.grid.as_deref().or(c.grid.as_deref()),
+            r.dxcc_id.or(c.detail.dxcc_id),
+            r.state.as_deref().or(c.detail.state.as_deref()),
+            r.grid.as_deref().or(c.detail.grid.as_deref()),
         );
         batch.new_credits.push(ImportedCredit {
             qso_id: c.qso_id,
@@ -306,16 +339,25 @@ pub async fn apply_report(
     };
     let matches = match_records(records, &candidates);
 
-    let credit_qsos: Vec<QsoId> = records
-        .iter()
-        .zip(&matches)
-        .filter(|(r, _)| r.confirmed && !r.credits.is_empty())
-        .filter_map(|(_, m)| m.map(|ci| candidates[ci].qso_id))
-        .collect();
+    let matched_confirmations = |with: fn(&ServiceQso) -> bool| -> Vec<QsoId> {
+        records
+            .iter()
+            .zip(&matches)
+            .filter(|(r, _)| r.confirmed && with(r))
+            .filter_map(|(_, m)| m.map(|ci| candidates[ci].qso_id))
+            .collect()
+    };
+    let credit_qsos = matched_confirmations(|r| !r.credits.is_empty());
     let existing = if credit_qsos.is_empty() {
         HashMap::new()
     } else {
         repo.list_credits_for(&credit_qsos).await?
+    };
+    let detail_qsos = matched_confirmations(|r| !r.detail.is_empty());
+    let provenance = if detail_qsos.is_empty() {
+        HashMap::new()
+    } else {
+        repo.list_service_provenance_for(service, &detail_qsos).await?
     };
 
     let watermark = watermark.map(|value| SyncWatermark {
@@ -329,6 +371,7 @@ pub async fn apply_report(
         &candidates,
         &matches,
         &existing,
+        &provenance,
         watermark,
         now,
     );
@@ -344,6 +387,8 @@ mod tests {
 
     use super::*;
     use crate::credit::parse_credit_list;
+    use crate::qsl_detail::LocationDetail;
+    use radio_core::FieldSource;
 
     fn t(h: u32, m: u32, s: u32) -> DateTime<Utc> {
         Utc.with_ymd_and_hms(2026, 5, 8, h, m, s).unwrap()
@@ -364,6 +409,7 @@ mod tests {
             dxcc_id: None,
             state: None,
             grid: None,
+            detail: Vec::new(),
         }
     }
 
@@ -375,9 +421,12 @@ mod tests {
             qso_begin: begin,
             band: Some(band.into()),
             mode: mode.map(String::from),
-            dxcc_id: Some(291),
-            state: Some("CT".into()),
-            grid: Some("FN31".into()),
+            detail: LocationDetail {
+                dxcc_id: Some(291),
+                state: Some("CT".into()),
+                grid: Some("FN31".into()),
+                ..Default::default()
+            },
             upload_verified: false,
             confirmed: false,
         }
@@ -537,6 +586,7 @@ mod tests {
             cands,
             &matches,
             existing,
+            &HashMap::new(),
             None,
             t(23, 0, 0),
         )
@@ -659,5 +709,81 @@ mod tests {
         unconfirmed.confirmed = false;
         let (batch, _) = plan(&[unconfirmed], &cands, &HashMap::new());
         assert!(batch.new_credits.is_empty());
+    }
+
+    #[test]
+    fn plan_fills_detail_from_confirmations_only() {
+        let c = cand("W1AW", "20M", Some("CW"), t(9, 0, 0));
+        let other = cand("W1AW", "40M", Some("CW"), t(9, 0, 0));
+        let cands = vec![c.clone(), other.clone()];
+        let mut r = rec("W1AW", "20M", "CW", t(9, 0, 0));
+        r.confirmed = true;
+        r.detail = vec![
+            (DetailField::State, "MA".into()),          // CT locally: differs
+            (DetailField::Cnty, "CT,Hartford".into()),  // blank: filled
+            (DetailField::Gridsquare, "FN31pr".into()), // refines FN31
+        ];
+        let (batch, out) = plan(std::slice::from_ref(&r), &cands, &HashMap::new());
+        assert_eq!(batch.detail_fills.len(), 1);
+        assert_eq!(batch.detail_fills[0].qso_id, c.qso_id);
+        assert_eq!(batch.detail_fills[0].values.county.as_deref(), Some("CT,Hartford"));
+        assert_eq!(batch.detail_fills[0].values.grid.as_deref(), Some("FN31pr"));
+        assert_eq!(batch.detail_fills[0].values.state, None);
+        let rows: Vec<(&str, FieldSource)> = batch
+            .provenance
+            .iter()
+            .map(|w| (w.field_name.as_str(), w.row.clone().unwrap().0))
+            .collect();
+        assert_eq!(
+            rows,
+            vec![
+                ("GRIDSQUARE", FieldSource::ServiceSync("lotw".into())),
+                ("STATE", FieldSource::ServiceDiffers("lotw".into())),
+                ("CNTY", FieldSource::ServiceSync("lotw".into())),
+            ]
+        );
+        assert_eq!((out.qsos_filled, out.qsos_differing), (1, 1));
+        // The unmatched QSO is untouched.
+        assert!(batch.provenance.iter().all(|w| w.qso_id == c.qso_id));
+
+        // The same detail on a record that isn't a confirmation: ignored.
+        let mut unconfirmed = r.clone();
+        unconfirmed.confirmed = false;
+        let (batch, out) = plan(&[unconfirmed], &cands, &HashMap::new());
+        assert!(batch.detail_fills.is_empty() && batch.provenance.is_empty());
+        assert_eq!((out.qsos_filled, out.qsos_differing), (0, 0));
+
+        // A confirmation without detail (the uploads report's view of a
+        // confirmed QSO) leaves recorded differences alone; one with
+        // detail that no longer includes the field drops it.
+        let rows = HashMap::from([(
+            c.qso_id,
+            vec![FieldProvenance {
+                field_name: "STATE".into(),
+                source: FieldSource::ServiceDiffers("lotw".into()),
+                source_detail: Some("MA".into()),
+                created_at: t(9, 0, 0),
+            }],
+        )]);
+        let plan_with = |r: &ServiceQso| {
+            plan_sync(
+                "lotw",
+                std::slice::from_ref(r),
+                &cands,
+                &match_records(std::slice::from_ref(r), &cands),
+                &HashMap::new(),
+                &rows,
+                None,
+                t(23, 0, 0),
+            )
+            .0
+        };
+        let mut bare = r.clone();
+        bare.detail.clear();
+        assert!(plan_with(&bare).provenance.is_empty());
+        let mut without_state = r;
+        without_state.detail.retain(|(f, _)| *f != DetailField::State);
+        let gone = plan_with(&without_state);
+        assert!(gone.provenance.iter().any(|w| w.field_name == "STATE" && w.row.is_none()));
     }
 }

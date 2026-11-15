@@ -8,8 +8,8 @@ use eqsl_sync::{EqslFetchClient, EqslFetchConfig, EqslUploadClient, EqslUploadCo
 use hrdlog_sync::{HrdlogConfig as HrdlogClientConfig, HrdlogUploadClient};
 use logbook_domain::credit::parse_credit_list;
 use logbook_domain::{
-    CreditStatus, ExportOptions, QsoRepository, ServiceQso, StationRepository, SyncOutcome,
-    apply_report, export_adif,
+    CreditStatus, DetailField, ExportOptions, QsoRepository, ServiceQso, StationRepository,
+    SyncOutcome, apply_report, export_adif,
 };
 use lotw_sync::{LotwFetchClient, LotwFetchConfig, LotwRecord, LotwReportKind, SINCE_BEGINNING};
 use qrz_sync::{QrzConfig as QrzClientConfig, QrzUploadClient};
@@ -134,6 +134,8 @@ pub(super) async fn run_lotw_sync(
                 summary.new_confirmations += outcome.newly_confirmed;
                 summary.uploads_verified += outcome.newly_verified;
                 summary.credits += outcome.credits_changed;
+                summary.qsos_filled += outcome.qsos_filled;
+                summary.qsos_differing += outcome.qsos_differing;
                 summary.unreadable += unreadable;
                 for &i in &outcome.not_in_log {
                     let r = &records[i];
@@ -214,6 +216,11 @@ fn service_qso(r: LotwRecord) -> ServiceQso {
         dxcc_id: r.dxcc,
         state: r.state,
         grid: r.gridsquare,
+        detail: r
+            .qsl_detail
+            .into_iter()
+            .filter_map(|(name, value)| Some((DetailField::from_adif_name(&name)?, value)))
+            .collect(),
     }
 }
 
@@ -540,6 +547,10 @@ fn format_lotw_summary(s: &UpdateSummary) -> String {
 /// One line for a LoTW sync, e.g. `3 new confirmations · 12 uploads
 /// verified · 1 not in log`. "Not in log" is QSOs LoTW holds that match
 /// nothing here — expected when QSOs were uploaded from elsewhere.
+/// "Filled in" and "differ" count QSOs, not fields: those whose blank
+/// location fields took the other station's values from its
+/// confirmation, and those where it newly reports something the log
+/// doesn't hold (listed by the Logbook's "Differs from LoTW" filter).
 pub(super) fn format_lotw_fetch(f: &FetchSummary) -> String {
     let count = |n: usize, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
     let mut parts = Vec::new();
@@ -553,6 +564,12 @@ pub(super) fn format_lotw_fetch(f: &FetchSummary) -> String {
     }
     if f.credits > 0 {
         parts.push(count(f.credits, "award credit updated", "award credits updated"));
+    }
+    if f.qsos_filled > 0 {
+        parts.push(count(f.qsos_filled, "QSO filled in from LoTW", "QSOs filled in from LoTW"));
+    }
+    if f.qsos_differing > 0 {
+        parts.push(count(f.qsos_differing, "differs from LoTW", "differ from LoTW"));
     }
     if f.unreadable > 0 {
         parts.push(count(f.unreadable, "record unreadable", "records unreadable"));
@@ -641,6 +658,7 @@ mod tests {
         let report = lotw_sync::fetch::parse_report(body, LotwReportKind::Confirmations).unwrap();
         let q = service_qso(report.records.into_iter().next().unwrap());
         assert!(q.confirmed);
+        assert!(q.detail.is_empty());
         let got: Vec<(&str, Option<&str>, CreditStatus)> = q
             .credits
             .iter()
@@ -672,11 +690,38 @@ mod tests {
         f.new_confirmations = 1;
         f.uploads_verified = 0;
         f.credits = 2;
+        f.qsos_filled = 41;
+        f.qsos_differing = 3;
         f.errors.push("uploads report failed: HTTP error: timed out".into());
         assert_eq!(
             format_lotw_fetch(&f),
             "full resync · 1 new confirmation · 0 uploads verified · 1 not in log · \
-             2 award credits updated · uploads report failed: HTTP error: timed out"
+             2 award credits updated · 41 QSOs filled in from LoTW · 3 differ from LoTW · \
+             uploads report failed: HTTP error: timed out"
         );
+        f.qsos_filled = 1;
+        f.qsos_differing = 1;
+        f.errors.clear();
+        assert!(format_lotw_fetch(&f).ends_with("1 QSO filled in from LoTW · 1 differs from LoTW"));
+    }
+
+    #[test]
+    fn lotw_record_detail_reaches_the_matcher_by_field() {
+        let body = "<EOH><STATION_CALLSIGN:5>K1ABC<CALL:4>W1AW<BAND:3>20M<MODE:2>CW\
+            <QSO_DATE:8>20260508<TIME_ON:4>1830<QSL_RCVD:1>Y<DXCC:3>291<PFX:2>W1\
+            <STATE:2>ct<GRIDSQUARE:6>FN31pr<COUNTRY:3>USA<EOR><APP_LoTW_EOF>";
+        let report = lotw_sync::fetch::parse_report(body, LotwReportKind::Confirmations).unwrap();
+        let q = service_qso(report.records.into_iter().next().unwrap());
+        assert_eq!(
+            q.detail,
+            vec![
+                (DetailField::Dxcc, "291".to_string()),
+                (DetailField::Gridsquare, "FN31pr".to_string()),
+                (DetailField::State, "ct".to_string()),
+                (DetailField::Pfx, "W1".to_string()),
+            ]
+        );
+        // The credit unit keeps its own, upper-cased copy.
+        assert_eq!(q.state.as_deref(), Some("CT"));
     }
 }

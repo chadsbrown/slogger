@@ -244,6 +244,11 @@ pub struct FetchSummary {
     pub not_in_log: usize,
     /// Award credits added or raised from submitted to granted.
     pub credits: usize,
+    /// QSOs with location fields filled in from LoTW's confirmations.
+    pub qsos_filled: usize,
+    /// QSOs where LoTW newly reports a location field other than the
+    /// log holds.
+    pub qsos_differing: usize,
     /// Records LoTW sent without a call or a readable date and time.
     pub unreadable: usize,
     /// A report that failed while the other was applied.

@@ -3,10 +3,12 @@ use chrono::{DateTime, Utc};
 use thiserror::Error;
 
 use radio_core::{
-    Band, Callsign, Mode, Qso, QsoExchangeField, QsoId, StationLocation, StationLocationId,
+    Band, Callsign, FieldSource, Mode, Qso, QsoExchangeField, QsoId, StationLocation,
+    StationLocationId,
 };
 
 use crate::credit::AwardCredit;
+use crate::qsl_detail::{FieldProvenance, LocationDetail};
 use crate::queries::{QsoSearch, QsoSummary};
 
 /// Slim per-QSO snapshot for award computation. Pulled in one query that
@@ -100,13 +102,15 @@ pub struct QsoServiceState {
 
 /// Everything stored about one QSO: the record itself, the extra fields
 /// kept alongside it (ADIF fields with no column of their own), where it
-/// stands with each QSL service, and the award credit it carries.
+/// stands with each QSL service, the award credit it carries, and where
+/// field values came from (see `qsl_detail`).
 #[derive(Debug, Clone)]
 pub struct QsoDetail {
     pub qso: Qso,
     pub exchange_fields: Vec<QsoExchangeField>,
     pub service_states: Vec<QsoServiceState>,
     pub credits: Vec<AwardCredit>,
+    pub provenance: Vec<FieldProvenance>,
 }
 
 #[derive(Debug, Clone)]
@@ -210,10 +214,11 @@ pub struct SyncCandidate {
     pub qso_begin: DateTime<Utc>,
     pub band: Option<String>,
     pub mode: Option<String>,
-    /// What award credit counts towards when the service doesn't say.
-    pub dxcc_id: Option<u16>,
-    pub state: Option<String>,
-    pub grid: Option<String>,
+    /// The QSO's location columns: what award credit counts towards when
+    /// the service doesn't say, and what the service's detail is compared
+    /// with. Loaded with the rest so a report needs no extra query for
+    /// them.
+    pub detail: LocationDetail,
     pub upload_verified: bool,
     pub confirmed: bool,
 }
@@ -240,6 +245,28 @@ pub struct CreditUpgrade {
     pub medium: Option<String>,
 }
 
+/// Columns a service's detail fills on one QSO: the fields of `values`
+/// that are `Some` are written, the rest are left as they are.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DetailFill {
+    pub qso_id: QsoId,
+    pub values: LocationDetail,
+}
+
+/// A change to the one `qso_field_provenance` row a service keeps for a
+/// QSO field: added (`replaces` is `None`), rewritten in place (both
+/// set), or removed (`row` is `None`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProvenanceWrite {
+    pub qso_id: QsoId,
+    /// The ADIF field name (`qsl_detail::DetailField::adif_name`).
+    pub field_name: String,
+    /// Source of the stored row this one replaces.
+    pub replaces: Option<FieldSource>,
+    /// Source and `source_detail` to store.
+    pub row: Option<(FieldSource, String)>,
+}
+
 /// Where a service's incremental report left off: the value to send as
 /// `since` next time, stored per (service, report).
 #[derive(Debug, Clone, PartialEq)]
@@ -258,6 +285,9 @@ pub struct SyncBatch {
     pub states: Vec<SyncStateChange>,
     pub new_credits: Vec<ImportedCredit>,
     pub credit_upgrades: Vec<CreditUpgrade>,
+    /// Location columns filled in from confirmations, one per QSO.
+    pub detail_fills: Vec<DetailFill>,
+    pub provenance: Vec<ProvenanceWrite>,
     pub watermark: Option<SyncWatermark>,
 }
 
@@ -266,6 +296,8 @@ impl SyncBatch {
         self.states.is_empty()
             && self.new_credits.is_empty()
             && self.credit_upgrades.is_empty()
+            && self.detail_fills.is_empty()
+            && self.provenance.is_empty()
             && self.watermark.is_none()
     }
 }
@@ -307,6 +339,9 @@ pub trait QsoRepository: std::fmt::Debug + Send + Sync {
     /// Award credit linked to one QSO, granted before submitted, then by
     /// award name.
     async fn list_credits(&self, qso_id: &QsoId) -> RepoResult<Vec<AwardCredit>>;
+
+    /// Every `qso_field_provenance` row for one QSO, by field name.
+    async fn list_field_provenance(&self, qso_id: &QsoId) -> RepoResult<Vec<FieldProvenance>>;
 
     async fn search_qsos(&self, query: QsoSearch) -> RepoResult<Vec<QsoSummary>>;
 
@@ -451,6 +486,15 @@ pub trait QsoRepository: std::fmt::Debug + Send + Sync {
         &self,
         qso_ids: &[QsoId],
     ) -> RepoResult<std::collections::HashMap<QsoId, Vec<AwardCredit>>>;
+
+    /// The provenance rows `service` keeps (sources `service_sync:<service>`
+    /// and `service_differs:<service>`) on each of `qso_ids`, in chunks
+    /// like `list_credits_for`. QSOs with none are absent from the map.
+    async fn list_service_provenance_for(
+        &self,
+        service: &str,
+        qso_ids: &[QsoId],
+    ) -> RepoResult<std::collections::HashMap<QsoId, Vec<FieldProvenance>>>;
 
     /// Write one sync report's changes and its watermark in a single
     /// transaction.

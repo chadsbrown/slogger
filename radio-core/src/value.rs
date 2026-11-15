@@ -263,8 +263,15 @@ pub enum FieldSource {
     RigDerived,
     ImportedAdif,
     StationDataResolved,
+    /// The value came from a QSL service (`lotw`, …) — e.g. a field LoTW's
+    /// confirmation filled in where the log was blank.
     ServiceSync(String),
     ManualOverride,
+    /// Not where the value came from: the service reports a different
+    /// value than the log holds, and the log's was kept. Recorded so the
+    /// operator can see the disagreement; the service's value goes with it
+    /// (`qso_field_provenance.source_detail`).
+    ServiceDiffers(String),
 }
 
 impl FieldSource {
@@ -276,12 +283,16 @@ impl FieldSource {
             Self::StationDataResolved => "station_data_resolved".into(),
             Self::ServiceSync(svc) => format!("service_sync:{svc}"),
             Self::ManualOverride => "manual_override".into(),
+            Self::ServiceDiffers(svc) => format!("service_differs:{svc}"),
         }
     }
 
     pub fn parse_storage(s: &str) -> Self {
         if let Some(rest) = s.strip_prefix("service_sync:") {
             return Self::ServiceSync(rest.to_string());
+        }
+        if let Some(rest) = s.strip_prefix("service_differs:") {
+            return Self::ServiceDiffers(rest.to_string());
         }
         match s {
             "operator_entered" => Self::OperatorEntered,
@@ -344,8 +355,16 @@ mod tests {
 
     #[test]
     fn field_source_storage_roundtrip() {
-        let original = FieldSource::ServiceSync("lotw".into());
-        let stored = original.as_storage_str();
-        assert_eq!(FieldSource::parse_storage(&stored), original);
+        for original in [
+            FieldSource::ServiceSync("lotw".into()),
+            FieldSource::ServiceDiffers("lotw".into()),
+        ] {
+            let stored = original.as_storage_str();
+            assert_eq!(FieldSource::parse_storage(&stored), original);
+        }
+        assert_eq!(
+            FieldSource::ServiceDiffers("lotw".into()).as_storage_str(),
+            "service_differs:lotw"
+        );
     }
 }

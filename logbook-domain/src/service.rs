@@ -36,14 +36,14 @@ pub struct ImportReport {
 }
 
 /// The parts of a `CreateQsoCommand` that aren't columns of the QSO.
-struct CommandExtras {
+pub(crate) struct CommandExtras {
     exchange_fields: Vec<QsoExchangeField>,
     station_location_ref: Option<StationLocationRef>,
     credits: Vec<AwardCredit>,
 }
 
 /// Split a command into the QSO record (not yet enriched) and the rest.
-fn qso_from_command(
+pub(crate) fn qso_from_command(
     id: QsoId,
     command: CreateQsoCommand,
     created_at: DateTime<Utc>,
@@ -277,8 +277,8 @@ impl LogbookService {
         self.repo.get_qso(id).await
     }
 
-    /// The QSO plus its extra fields and per-service QSL state — what a
-    /// detail view needs. `None` if the QSO doesn't exist.
+    /// The QSO plus its extra fields, per-service QSL state, award credit
+    /// and field provenance — what a detail view needs. `None` if the QSO doesn't exist.
     pub async fn get_qso_detail(&self, id: &QsoId) -> RepoResult<Option<QsoDetail>> {
         let Some(qso) = self.repo.get_qso(id).await? else {
             return Ok(None);
@@ -288,6 +288,7 @@ impl LogbookService {
             exchange_fields: self.repo.list_exchange_fields(id).await?,
             service_states: self.repo.list_service_states(id).await?,
             credits: self.repo.list_credits(id).await?,
+            provenance: self.repo.list_field_provenance(id).await?,
         }))
     }
 
@@ -309,6 +310,10 @@ impl LogbookService {
         // Note: this leaves existing exchange_fields in place. Re-syncing
         // them on every edit would risk losing imported ADIF metadata.
         // Edits to specific exchange fields would be a separate command.
+        // Field provenance rows stay too: they record what a service
+        // reported, which an edit doesn't change. Where an edit has made
+        // one moot, `qsl_detail::service_details` reads it against the new
+        // values, and the next sync of that QSO's record rewrites it.
     }
 
     pub async fn delete_qso(&self, id: &QsoId) -> RepoResult<()> {

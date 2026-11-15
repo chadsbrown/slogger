@@ -4,9 +4,9 @@ use sqlx::{Row, SqlitePool};
 use uuid::Uuid;
 
 use logbook_domain::{
-    AwardCredit, AwardQso, CreditStatus, DedupKey, ImportBatch, ImportedCredit, LocationFilter,
-    PendingUploadCount, QsoRepository, QsoSearch, QsoServiceState, QsoSummary, RepoResult,
-    RepositoryError, SyncBatch, SyncCandidate,
+    AwardCredit, AwardQso, CreditStatus, DedupKey, FieldProvenance, ImportBatch, ImportedCredit,
+    LocationDetail, LocationFilter, PendingUploadCount, QsoRepository, QsoSearch,
+    QsoServiceState, QsoSummary, RepoResult, RepositoryError, SyncBatch, SyncCandidate,
 };
 use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
@@ -78,6 +78,15 @@ fn build_filter(query: &QsoSearch) -> (String, Vec<DynBind>) {
         Some(true) => sql.push_str(" AND s.confirmation_state = 'confirmed'"),
         Some(false) => sql.push_str(" AND (s.id IS NULL OR s.confirmation_state != 'confirmed')"),
         None => {}
+    }
+    if query.differs_from_lotw {
+        sql.push_str(
+            " AND EXISTS (SELECT 1 FROM qso_field_provenance p \
+             WHERE p.qso_id = q.id AND p.source = ?)",
+        );
+        binds.push(DynBind::Text(
+            FieldSource::ServiceDiffers("lotw".into()).as_storage_str(),
+        ));
     }
 
     (sql, binds)
@@ -336,6 +345,17 @@ async fn insert_credits(
         .map_err(map_err)?;
     }
     Ok(())
+}
+
+fn row_to_provenance(row: &sqlx::sqlite::SqliteRow) -> RepoResult<FieldProvenance> {
+    let source: String = row.try_get("source").map_err(map_err)?;
+    let created_at: String = row.try_get("created_at").map_err(map_err)?;
+    Ok(FieldProvenance {
+        field_name: row.try_get("field_name").map_err(map_err)?,
+        source: FieldSource::parse_storage(&source),
+        source_detail: row.try_get("source_detail").map_err(map_err)?,
+        created_at: parse_dt(&created_at)?,
+    })
 }
 
 /// Rows per `IN (...)` list: well under SQLite's bound-parameter limit.
@@ -655,6 +675,18 @@ impl QsoRepository for SqliteQsoRepository {
             });
         }
         Ok(out)
+    }
+
+    async fn list_field_provenance(&self, qso_id: &QsoId) -> RepoResult<Vec<FieldProvenance>> {
+        let rows = sqlx::query(
+            "SELECT field_name, source, source_detail, created_at
+             FROM qso_field_provenance WHERE qso_id = ? ORDER BY field_name, source",
+        )
+        .bind(fmt_id(qso_id.as_uuid()))
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_err)?;
+        rows.iter().map(row_to_provenance).collect()
     }
 
     async fn list_exchange_fields(
@@ -1270,7 +1302,8 @@ impl QsoRepository for SqliteQsoRepository {
         for chunk in calls.chunks(IN_CHUNK) {
             let sql = format!(
                 "SELECT q.id, q.call, q.station_callsign, q.qso_begin, q.band, q.mode,
-                        q.dxcc_id, q.state, q.grid,
+                        q.dxcc_id, q.continent, q.cq_zone, q.itu_zone, q.iota, q.grid,
+                        q.state, q.county, q.wpx_prefix,
                         COALESCE(s.upload_state = 'verified', 0) AS verified,
                         COALESCE(s.confirmation_state = 'confirmed', 0) AS confirmed
                  FROM qsos q
@@ -1286,7 +1319,8 @@ impl QsoRepository for SqliteQsoRepository {
             for row in &rows {
                 let id: String = row.try_get("id").map_err(map_err)?;
                 let begin: String = row.try_get("qso_begin").map_err(map_err)?;
-                let dxcc_id: Option<i64> = row.try_get("dxcc_id").map_err(map_err)?;
+                let int = |col| -> RepoResult<Option<i64>> { row.try_get(col).map_err(map_err) };
+                let text = |col| -> RepoResult<Option<String>> { row.try_get(col).map_err(map_err) };
                 let verified: i64 = row.try_get("verified").map_err(map_err)?;
                 let confirmed: i64 = row.try_get("confirmed").map_err(map_err)?;
                 out.push(SyncCandidate {
@@ -1296,9 +1330,17 @@ impl QsoRepository for SqliteQsoRepository {
                     qso_begin: parse_dt(&begin)?,
                     band: row.try_get("band").map_err(map_err)?,
                     mode: row.try_get("mode").map_err(map_err)?,
-                    dxcc_id: dxcc_id.map(|v| v as u16),
-                    state: row.try_get("state").map_err(map_err)?,
-                    grid: row.try_get("grid").map_err(map_err)?,
+                    detail: LocationDetail {
+                        dxcc_id: int("dxcc_id")?.map(|v| v as u16),
+                        continent: text("continent")?,
+                        cq_zone: int("cq_zone")?.map(|v| v as u8),
+                        itu_zone: int("itu_zone")?.map(|v| v as u8),
+                        iota: text("iota")?,
+                        grid: text("grid")?,
+                        state: text("state")?,
+                        county: text("county")?,
+                        wpx_prefix: text("wpx_prefix")?,
+                    },
                     upload_verified: verified != 0,
                     confirmed: confirmed != 0,
                 });
@@ -1343,6 +1385,36 @@ impl QsoRepository for SqliteQsoRepository {
                         medium: row.try_get("medium").map_err(map_err)?,
                         status,
                     });
+            }
+        }
+        Ok(out)
+    }
+
+    async fn list_service_provenance_for(
+        &self,
+        service: &str,
+        qso_ids: &[QsoId],
+    ) -> RepoResult<HashMap<QsoId, Vec<FieldProvenance>>> {
+        let synced = FieldSource::ServiceSync(service.to_string()).as_storage_str();
+        let differs = FieldSource::ServiceDiffers(service.to_string()).as_storage_str();
+        let mut out: HashMap<QsoId, Vec<FieldProvenance>> = HashMap::new();
+        for chunk in qso_ids.chunks(IN_CHUNK) {
+            let sql = format!(
+                "SELECT qso_id, field_name, source, source_detail, created_at
+                 FROM qso_field_provenance
+                 WHERE source IN (?, ?) AND qso_id IN ({})",
+                placeholders(chunk.len())
+            );
+            let mut query = sqlx::query(&sql).bind(&synced).bind(&differs);
+            for id in chunk {
+                query = query.bind(fmt_id(id.as_uuid()));
+            }
+            let rows = query.fetch_all(&self.pool).await.map_err(map_err)?;
+            for row in &rows {
+                let qso_id: String = row.try_get("qso_id").map_err(map_err)?;
+                out.entry(QsoId::from_uuid(parse_uuid(&qso_id)?))
+                    .or_default()
+                    .push(row_to_provenance(row)?);
             }
         }
         Ok(out)
@@ -1414,6 +1486,96 @@ impl QsoRepository for SqliteQsoRepository {
             .execute(&mut *tx)
             .await
             .map_err(map_err)?;
+        }
+
+        for f in &batch.detail_fills {
+            // Only the fields the plan fills are bound; NULL keeps the
+            // column. One statement shape for every QSO, whatever it fills.
+            let v = &f.values;
+            sqlx::query(
+                r#"
+                UPDATE qsos SET
+                    dxcc_id = COALESCE(?, dxcc_id),
+                    continent = COALESCE(?, continent),
+                    cq_zone = COALESCE(?, cq_zone),
+                    itu_zone = COALESCE(?, itu_zone),
+                    iota = COALESCE(?, iota),
+                    grid = COALESCE(?, grid),
+                    state = COALESCE(?, state),
+                    county = COALESCE(?, county),
+                    wpx_prefix = COALESCE(?, wpx_prefix),
+                    updated_at = ?
+                WHERE id = ?
+                "#,
+            )
+            .bind(v.dxcc_id.map(i64::from))
+            .bind(&v.continent)
+            .bind(v.cq_zone.map(i64::from))
+            .bind(v.itu_zone.map(i64::from))
+            .bind(&v.iota)
+            .bind(&v.grid)
+            .bind(&v.state)
+            .bind(&v.county)
+            .bind(&v.wpx_prefix)
+            .bind(&now)
+            .bind(fmt_id(f.qso_id.as_uuid()))
+            .execute(&mut *tx)
+            .await
+            .map_err(map_err)?;
+        }
+
+        // In index order: a first sync adds several rows to each of tens
+        // of thousands of QSOs, and inserting them sorted by the unique
+        // index's key, rather than in report order, saves about a tenth.
+        let mut writes: Vec<_> = batch.provenance.iter().collect();
+        writes.sort_unstable_by(|a, b| {
+            (a.qso_id.as_uuid(), &a.field_name).cmp(&(b.qso_id.as_uuid(), &b.field_name))
+        });
+        for p in writes {
+            let qso_id = fmt_id(p.qso_id.as_uuid());
+            let query = match (&p.replaces, &p.row) {
+                (None, None) => continue,
+                // Upsert rather than insert: a row the plan didn't see
+                // (written since it loaded) is replaced, not an error
+                // that loses the whole report.
+                (None, Some((source, detail))) => sqlx::query(
+                    r#"
+                    INSERT INTO qso_field_provenance
+                        (id, qso_id, field_name, source, source_detail, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(qso_id, field_name, source) DO UPDATE SET
+                        source_detail = excluded.source_detail,
+                        created_at = excluded.created_at
+                    "#,
+                )
+                .bind(fmt_id(Uuid::new_v4()))
+                .bind(qso_id)
+                .bind(&p.field_name)
+                .bind(source.as_storage_str())
+                .bind(detail)
+                .bind(&now),
+                (Some(old), Some((source, detail))) => sqlx::query(
+                    r#"
+                    UPDATE qso_field_provenance
+                    SET source = ?, source_detail = ?, created_at = ?
+                    WHERE qso_id = ? AND field_name = ? AND source = ?
+                    "#,
+                )
+                .bind(source.as_storage_str())
+                .bind(detail)
+                .bind(&now)
+                .bind(qso_id)
+                .bind(&p.field_name)
+                .bind(old.as_storage_str()),
+                (Some(old), None) => sqlx::query(
+                    "DELETE FROM qso_field_provenance
+                     WHERE qso_id = ? AND field_name = ? AND source = ?",
+                )
+                .bind(qso_id)
+                .bind(&p.field_name)
+                .bind(old.as_storage_str()),
+            };
+            query.execute(&mut *tx).await.map_err(map_err)?;
         }
 
         if let Some(w) = &batch.watermark {
@@ -2788,6 +2950,7 @@ Japan:                              25:  45:  AS:   36.24: -139.00:    -9.0:  JA
             dxcc_id: Some(291),
             state: None,
             grid: None,
+            detail: Vec::new(),
         };
         let mut second_rec = record("20M", 10, 3, true);
         second_rec.credits = parse_credit_list("DXCC:LOTW", CreditStatus::Submitted);
@@ -2873,5 +3036,171 @@ Japan:                              25:  45:  AS:   36.24: -139.00:    -9.0:  JA
             .await
             .unwrap();
         assert_eq!(unit, "291");
+    }
+
+    #[tokio::test]
+    async fn lotw_detail_fills_blanks_records_differences_and_stays_idempotent() {
+        use logbook_domain::{DetailField, ServiceQso, apply_report};
+
+        let (svc, db) = fresh_service_with_db().await;
+        let repo = svc_repo(&db);
+        let at = |h, m| Utc.with_ymd_and_hms(2026, 5, 8, h, m, 0).unwrap();
+        let mut cmd = CreateQsoCommand {
+            band: Some(Band::M20),
+            mode: Some(Mode::CW),
+            station_callsign: Some(Callsign::parse("K1ABC").unwrap()),
+            ..CreateQsoCommand::minimal(Callsign::parse("W9XYZ").unwrap(), at(10, 0))
+        };
+        cmd.dxcc_id = Some(291);
+        cmd.grid = Some("EN61".into());
+        cmd.state = Some("IL".into());
+        let id = svc.create_qso(cmd.clone()).await.unwrap();
+        // Same station on another band: no record for it, never touched.
+        cmd.band = Some(Band::M40);
+        cmd.grid = None;
+        cmd.state = None;
+        let untouched = svc.create_qso(cmd).await.unwrap();
+
+        let raw = |pairs: &[(DetailField, &str)]| {
+            pairs.iter().map(|(f, v)| (*f, v.to_string())).collect::<Vec<_>>()
+        };
+        let record = |detail: Vec<(DetailField, String)>| ServiceQso {
+            station_callsign: Some("K1ABC".into()),
+            call: "W9XYZ".into(),
+            start: at(10, 0),
+            band: Some("20M".into()),
+            mode: Some("CW".into()),
+            mode_group: None,
+            confirmed: true,
+            confirmed_at: Some(at(20, 0)),
+            uploaded_at: None,
+            credits: Vec::new(),
+            dxcc_id: Some(291),
+            state: None,
+            grid: None,
+            detail,
+        };
+        let detail = raw(&[
+            (DetailField::Dxcc, "291"),          // agrees
+            (DetailField::Gridsquare, "EN61ax"), // refines EN61
+            (DetailField::State, "IN"),          // differs from IL
+            (DetailField::Cnty, "IN,Lake"),      // fills
+            (DetailField::Cont, "na"),           // fills, upper-cased
+            (DetailField::Cqz, "04"),            // fills, as a number
+        ]);
+        let sync = |detail: Vec<(DetailField, String)>, when| {
+            let repo = &repo;
+            async move {
+                apply_report(repo, "lotw", &[record(detail)], "qsl_since", None, when)
+                    .await
+                    .unwrap()
+            }
+        };
+        let rows = || async {
+            sqlx::query_as::<_, (String, String, Option<String>)>(
+                "SELECT field_name, source, source_detail FROM qso_field_provenance \
+                 ORDER BY field_name",
+            )
+            .fetch_all(db.pool())
+            .await
+            .unwrap()
+        };
+        let row = |f: &str, s: &str, d: &str| (f.to_string(), s.to_string(), Some(d.to_string()));
+
+        let out = sync(detail.clone(), at(23, 0)).await;
+        assert_eq!((out.newly_confirmed, out.qsos_filled, out.qsos_differing), (1, 1, 1));
+        let q = repo.get_qso(&id).await.unwrap().unwrap();
+        assert_eq!(q.grid.as_deref(), Some("EN61ax"));
+        assert_eq!(q.state.as_deref(), Some("IL"), "a differing value is kept");
+        assert_eq!(q.county.as_deref(), Some("IN,Lake"));
+        assert_eq!(q.continent.as_deref(), Some("NA"));
+        assert_eq!(q.cq_zone, Some(4));
+        assert_eq!(q.dxcc_id, Some(291));
+        assert_eq!(q.itu_zone, None);
+        let first_rows = vec![
+            row("CNTY", "service_sync:lotw", "IN,Lake"),
+            row("CONT", "service_sync:lotw", "NA"),
+            row("CQZ", "service_sync:lotw", "4"),
+            row("GRIDSQUARE", "service_sync:lotw", "EN61ax"),
+            row("STATE", "service_differs:lotw", "IN"),
+        ];
+        assert_eq!(rows().await, first_rows);
+        let other = repo.get_qso(&untouched).await.unwrap().unwrap();
+        assert_eq!((other.county, other.grid), (None, None));
+
+        // The detail pane gets the rows.
+        let pane = svc.get_qso_detail(&id).await.unwrap().unwrap();
+        assert_eq!(pane.provenance.len(), 5);
+
+        // The filter lists exactly the QSO that differs, through all three
+        // search paths.
+        let differs = QsoSearch {
+            differs_from_lotw: true,
+            ..Default::default()
+        };
+        let hits = svc.search_qsos(differs.clone()).await.unwrap();
+        assert_eq!(hits.iter().map(|h| h.id).collect::<Vec<_>>(), vec![id]);
+        assert_eq!(svc.count_matching(differs.clone()).await.unwrap(), 1);
+        assert_eq!(svc.search_full_qsos(differs.clone()).await.unwrap().len(), 1);
+        assert_eq!(svc.count_matching(QsoSearch::default()).await.unwrap(), 2);
+
+        // The uploads report lists the confirmed QSO too, without detail:
+        // nothing about the detail changes.
+        let out = sync(Vec::new(), at(23, 10)).await;
+        assert_eq!((out.qsos_filled, out.qsos_differing), (0, 0));
+        assert_eq!(rows().await, first_rows);
+
+        // The same record again: nothing changes, nothing is added.
+        let updated = repo.get_qso(&id).await.unwrap().unwrap().updated_at;
+        let out = sync(detail.clone(), at(23, 30)).await;
+        assert_eq!((out.qsos_filled, out.qsos_differing), (0, 0));
+        assert_eq!(rows().await, first_rows);
+        assert_eq!(repo.get_qso(&id).await.unwrap().unwrap().updated_at, updated);
+
+        // An edit keeps the rows; the operator corrects the state to
+        // LoTW's.
+        let mut edit = CreateQsoCommand::from_qso(&repo.get_qso(&id).await.unwrap().unwrap());
+        edit.state = Some("in".into());
+        svc.update_qso(id, edit).await.unwrap();
+        assert_eq!(rows().await, first_rows);
+        // The next sync of the record drops the difference; the filter no
+        // longer finds it.
+        let out = sync(detail.clone(), at(23, 40)).await;
+        assert_eq!((out.qsos_filled, out.qsos_differing), (0, 0));
+        assert_eq!(rows().await, first_rows[..4].to_vec());
+        assert_eq!(svc.count_matching(differs.clone()).await.unwrap(), 0);
+
+        // LoTW's value changes: the one row for the field is rewritten.
+        let mut changed = detail.clone();
+        changed[3] = (DetailField::Cnty, "IN,Porter".into());
+        let out = sync(changed, at(23, 50)).await;
+        assert_eq!((out.qsos_filled, out.qsos_differing), (0, 1));
+        let now = rows().await;
+        assert_eq!(now[0], row("CNTY", "service_differs:lotw", "IN,Porter"));
+        assert_eq!(now.len(), 4);
+        assert_eq!(
+            repo.get_qso(&id).await.unwrap().unwrap().county.as_deref(),
+            Some("IN,Lake")
+        );
+
+        // Filled values count toward awards (computed live from columns),
+        // and export carries them as ordinary fields, not the bookkeeping.
+        let award = repo.list_award_qsos().await.unwrap();
+        let mine = award.iter().find(|a| a.id == id).unwrap();
+        assert_eq!(mine.continent.as_deref(), Some("NA"));
+        let adif = svc
+            .export_adif_by_search(
+                QsoSearch {
+                    exact_call: Some(Callsign::parse("W9XYZ").unwrap()),
+                    band: Some(Band::M20),
+                    ..Default::default()
+                },
+                &[],
+                &logbook_domain::ExportOptions::default(),
+            )
+            .await
+            .unwrap();
+        assert!(adif.contains("<CNTY:7>IN,Lake"), "{adif}");
+        assert!(!adif.contains("service_") && !adif.contains("IN,Porter"), "{adif}");
     }
 }

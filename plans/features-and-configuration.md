@@ -373,12 +373,44 @@ now). Nothing is downgraded. `CREDIT_GRANTED` / `CREDIT_SUBMITTED` on a
 confirmation become award credit on the QSO (added once; submitted raised
 to granted later). All changes from one report are one transaction.
 
+Other station's details: a confirmation (`qso_qsldetail=yes`) also says
+what the QSLing station told LoTW about its own location. Nine of those
+fields map to QSO columns — `DXCC`→`dxcc_id`, `CONT`→`continent`,
+`CQZ`→`cq_zone`, `ITUZ`→`itu_zone`, `IOTA`→`iota`, `GRIDSQUARE`→`grid`,
+`STATE`→`state`, `CNTY`→`county`, `PFX`→`wpx_prefix` — normalised as the
+ADIF importer does (`CONT`/`PFX` upper-cased, numbers as integers, the
+rest as given); `COUNTRY`, `VUCC_GRIDS`, `APP_LoTW_NPSUNIT` and the
+`*_UserInvalid` zones are not used. Per field, on the matched QSO only:
+a blank column is filled with LoTW's value; a grid that is a prefix of
+LoTW's (`EM69` vs `EM69xv`) is replaced by the more precise one; an equal
+value (case-insensitive, trimmed, numbers numerically, or LoTW's grid a
+prefix of the log's) is left alone; a different value is **kept** — the
+log may be right, or record what was heard — and the difference is
+recorded. Unconfirmed records, and confirmed ones without detail (the
+uploads report), change none of this. Filled values count toward awards
+like any other, since awards are computed from the columns.
+
+Both outcomes are rows in `qso_field_provenance`, at most one per QSO and
+field: `field_name` is the ADIF name above, `source` is
+`service_sync:lotw` (filled or refined from LoTW) or
+`service_differs:lotw` (LoTW reports something else; log kept), and
+`source_detail` is LoTW's value. A resync rewrites a field's row when
+LoTW's value changes, drops a "differs" row once the log agrees (e.g. the
+operator corrected it) or LoTW stops sending the field, and otherwise
+writes nothing. Editing a QSO leaves the rows alone; the detail pane reads
+them against the current values. The rows are internal bookkeeping:
+ADIF export doesn't include them. The Logbook detail pane lists them under
+**FROM LOTW** (`STATE  IN`, or `STATE  LoTW says IN, log has IL`), and the
+Logbook search's LotW filter has **Differs from LoTW**.
+
 An HTML page instead of ADIF (LoTW's way of reporting a failed query) is
 shown as a short message; records without the closing `<APP_LoTW_EOF>`
 are treated as a cut-off download and nothing from that report is
 applied. Summary, e.g. `sync: 3 new confirmations · 12 uploads verified ·
-1 not in log` ("not in log" = QSOs at LoTW with no match here, e.g.
-uploaded from another logger).
+1 not in log · 41 QSOs filled in from LoTW · 3 differ from LoTW` ("not in
+log" = QSOs at LoTW with no match here, e.g. uploaded from another
+logger; the last two count QSOs, not fields, and only new differences,
+and appear only when non-zero).
 
 Update services does upload-then-sync. **Full LoTW resync** (QSL tab)
 runs the sync alone, ignoring the stored watermarks, for when the log and

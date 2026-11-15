@@ -22,6 +22,10 @@ pub struct QsoSearch {
     /// `Some(false)`, only QSOs that are NOT confirmed via LotW (regardless
     /// of upload state). When `None`, no filter on confirmation.
     pub lotw_confirmed: Option<bool>,
+    /// Only QSOs where LoTW's confirmation reports a location field
+    /// (state, grid, zone, …) other than the log holds — the
+    /// `service_differs:lotw` rows a sync records (see `qsl_detail`).
+    pub differs_from_lotw: bool,
     /// Result ordering. Default (and the historic behavior) is
     /// `QsoBeginDesc` — most-recent QSOs first.
     pub sort: SortOrder,
