@@ -115,9 +115,15 @@ impl Scheme {
     /// Builds the iced theme: iced derives its shades from the palette,
     /// then the scheme's own surfaces replace the blended ones.
     fn theme(&self, name: impl Into<String>) -> Theme {
+        self.theme_with(name, self.hues())
+    }
+
+    /// [`Scheme::theme`], with table text in `hues` rather than the
+    /// scheme's usual choice.
+    fn theme_with(&self, name: impl Into<String>, hues: Hues) -> Theme {
         let name = name.into();
-        if let Ok(mut hues) = HUES.write() {
-            hues.insert(name.clone(), self.hues());
+        if let Ok(mut registry) = HUES.write() {
+            registry.insert(name.clone(), hues);
         }
         let scheme = *self;
         Theme::custom_with_fn(name, self.palette(), move |palette| {
@@ -204,31 +210,91 @@ pub(super) fn app_theme() -> Theme {
     SLOGGER.theme("slogger")
 }
 
-/// Themes designed for slogger: backgrounds in the middle of the range
-/// (neither near-black nor glaring white) under text with plenty of
-/// contrast. Six dark-side, then four light-side.
-const DESIGNED: &[(&str, [u32; 12])] = &[
-    ("Slate", [0x363c46, 0x414853, 0x566070, 0xa4adba, 0xf2f4f7, 0x8ec1ff,
-        0x8fdc9c, 0xf2cd72, 0xff9488, 0x7fdbe3, 0xdba7f5, 0xffb27a]),
-    ("Graphite", [0x3a3a3c, 0x464648, 0x5e5e62, 0xadadb2, 0xf4f4f5, 0x9cc4ff,
-        0x93d99a, 0xefcb74, 0xff958c, 0x82d8de, 0xd9a9ee, 0xffb380]),
-    ("Pine", [0x33403a, 0x3e4c45, 0x54665d, 0xa3b5aa, 0xf1f5ee, 0x8fd0c0,
-        0xa4dc8c, 0xeed07a, 0xff9a8a, 0x86d6e6, 0xe2aee0, 0xf7b77c]),
-    ("Umber", [0x423a35, 0x4e4540, 0x675b54, 0xb8aaa0, 0xf7f1ea, 0x9ccbe8,
-        0xb0d68a, 0xf0d27c, 0xff9a8c, 0x8fd3cf, 0xe3aed2, 0xffb07a]),
-    ("Dusk", [0x3b3a4a, 0x474658, 0x5f5d75, 0xadabc4, 0xf3f2fa, 0xa9b8ff,
-        0x96dba5, 0xf0cf7c, 0xff98a4, 0x86d7ea, 0xe4a8f2, 0xffb486]),
-    ("Harbor", [0x2f4150, 0x3a4d5d, 0x4f6679, 0xa0b5c5, 0xf0f5f9, 0x86c8ff,
-        0x92dfae, 0xf3d07a, 0xff9a8e, 0x7fe0e0, 0xdcaef5, 0xffb680]),
-    ("Fog", [0xcdd2d8, 0xc0c6cd, 0xa3abb5, 0x4c5561, 0x14171b, 0x0a468b,
-        0x125626, 0x624200, 0x941a1a, 0x00535e, 0x6b2684, 0x7b3200]),
-    ("Stone", [0xd2cfc8, 0xc5c2ba, 0xa8a49b, 0x55524b, 0x181715, 0x1b4584,
-        0x25541c, 0x624200, 0x911e1e, 0x005453, 0x6c2879, 0x7a3300]),
-    ("Parchment", [0xddd3bd, 0xd0c5ad, 0xb3a78c, 0x5d543f, 0x1c1810, 0x1a467e,
-        0x2f5417, 0x634200, 0x8f2015, 0x09544f, 0x6d2971, 0x783200]),
-    ("Sage", [0xc9d1c4, 0xbcc5b6, 0x9eaa97, 0x4b5746, 0x141a12, 0x13467b,
-        0x1b5520, 0x5d4300, 0x8f1f1f, 0x00545a, 0x682a7e, 0x763400]),
+/// Themes designed for slogger, as `(name, [background, surface, line])`:
+/// backgrounds in the middle of the range (neither near-black nor glaring
+/// white), each a differently tinted grey. Six dark-side, then four
+/// light-side. They share one set of plain, saturated colours per side
+/// (see [`Inks`]), so they differ only in the tone they sit on.
+const DESIGNED: &[(&str, [u32; 3])] = &[
+    ("Slate", [0x2f343d, 0x3a404a, 0x525a68]),
+    ("Graphite", [0x323234, 0x3e3e41, 0x58585c]),
+    ("Pine", [0x2c3832, 0x37443d, 0x4d5e55]),
+    ("Umber", [0x3a322d, 0x463d37, 0x60544c]),
+    ("Dusk", [0x33323f, 0x3f3e4d, 0x59576b]),
+    ("Harbor", [0x293a47, 0x344654, 0x4a6072]),
+    ("Fog", [0xcdd2d8, 0xc0c6cd, 0xa3abb5]),
+    ("Stone", [0xd2cfc8, 0xc5c2ba, 0xa8a49b]),
+    ("Parchment", [0xddd3bd, 0xd0c5ad, 0xb3a78c]),
+    ("Sage", [0xc9d1c4, 0xbcc5b6, 0x9eaa97]),
 ];
+
+/// The colours the designed themes draw with: the traditional ones, at
+/// full strength rather than softened.
+struct Inks {
+    muted: u32,
+    text: u32,
+    /// Buttons and highlights: blue.
+    accent: u32,
+    green: u32,
+    /// Warnings: amber.
+    amber: u32,
+    red: u32,
+    /// Callsigns.
+    call: u32,
+    /// Frequencies.
+    freq: u32,
+    magenta: u32,
+}
+
+/// For the dark-side themes: white text, yellow callsigns, cyan
+/// frequencies.
+const DARK_INKS: Inks = Inks {
+    muted: 0xa9afb8,
+    text: 0xf5f6f7,
+    accent: 0x4a93ff,
+    green: 0x33d65c,
+    amber: 0xffa726,
+    red: 0xff5252,
+    call: 0xffdd33,
+    freq: 0x29d3f0,
+    magenta: 0xff66e0,
+};
+
+/// For the light-side themes: black text, blue callsigns, teal
+/// frequencies.
+const LIGHT_INKS: Inks = Inks {
+    muted: 0x4f5560,
+    text: 0x101214,
+    accent: 0x1553c7,
+    green: 0x075a17,
+    amber: 0x7a4700,
+    red: 0xb81414,
+    call: 0x0a3fb5,
+    freq: 0x00566a,
+    magenta: 0x8a1f8a,
+};
+
+fn designed_scheme([background, surface, line]: [u32; 3]) -> Scheme {
+    let inks = if luminance(rgb(background)) < 0.18 { DARK_INKS } else { LIGHT_INKS };
+    Scheme::from_hex([
+        background, surface, line, inks.muted, inks.text, inks.accent,
+        inks.green, inks.amber, inks.red, inks.freq, inks.magenta, inks.call,
+    ])
+}
+
+/// The designed themes keep colour to callsigns, frequencies and status;
+/// bands and modes stay in the text colour.
+fn designed() -> impl Iterator<Item = Theme> {
+    DESIGNED.iter().map(|&(name, tones)| {
+        let scheme = designed_scheme(tones);
+        let hues = Hues {
+            band: scheme.text,
+            mode: scheme.text,
+            ..scheme.hues()
+        };
+        scheme.theme_with(name, hues)
+    })
+}
 
 /// Schemes collected from elsewhere, in alphabetical order: the themes
 /// distributed with Omarchy and a selection from the Tinted Theming
@@ -413,7 +479,7 @@ pub(super) fn all_themes() -> Vec<ThemeEntry> {
 fn themes_from(custom: Option<&Path>) -> Vec<ThemeEntry> {
     let entry = |source| move |theme| ThemeEntry { source, theme };
     let mut entries: Vec<ThemeEntry> = std::iter::once(app_theme())
-        .chain(schemes(DESIGNED))
+        .chain(designed())
         .map(entry(ThemeSource::Slogger))
         .collect();
     let bundled: Vec<ThemeEntry> = schemes(BUNDLED).map(entry(ThemeSource::Bundled)).collect();
@@ -1030,28 +1096,32 @@ palette:
 
     #[test]
     fn designed_themes_are_mid_toned_and_high_contrast() {
-        for &(name, colors) in DESIGNED {
-            let s = Scheme::from_hex(colors);
+        for (theme, &(name, tones)) in designed().zip(DESIGNED) {
+            let s = designed_scheme(tones);
             let lum = luminance(s.background);
             assert!(
-                (0.035..0.09).contains(&lum) || (0.55..0.75).contains(&lum),
+                (0.025..0.09).contains(&lum) || (0.55..0.75).contains(&lum),
                 "{name}: background luminance {lum}"
             );
-            assert!(contrast(s.text, s.background) >= 9.0, "{name}: text");
-            // As designed, before `legible` has had to step in.
-            for (what, c) in [
-                ("muted", s.muted),
-                ("accent", s.accent),
-                ("green", s.green),
-                ("yellow", s.yellow),
-                ("red", s.red),
-                ("cyan", s.cyan),
-                ("magenta", s.magenta),
-                ("orange", s.orange),
+            assert!(contrast(s.text, s.background) >= 10.0, "{name}: text");
+            // The inks as chosen, before `legible` has had to step in.
+            // Red and blue cannot be both saturated and bright, so the
+            // status colours get a lower bar than table text.
+            for (what, c, min) in [
+                ("muted", s.muted, 4.5),
+                ("call", s.orange, 4.5),
+                ("freq", s.cyan, 4.5),
+                ("green", s.green, 4.5),
+                ("amber", s.yellow, 4.5),
+                ("red", s.red, 3.5),
+                ("accent", s.accent, 3.5),
             ] {
                 let ratio = contrast(c, s.background);
-                assert!(ratio >= 4.5, "{name}: {what} is only {ratio:.1}:1");
+                assert!(ratio >= min, "{name}: {what} is only {ratio:.1}:1");
             }
+            let h = hues(&theme);
+            assert_eq!((h.band, h.mode), (s.text, s.text), "{name}");
+            assert_eq!(h.call, s.orange, "{name}");
         }
     }
 
