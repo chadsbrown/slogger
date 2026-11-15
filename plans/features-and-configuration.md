@@ -344,14 +344,45 @@ plus "already at LoTW", "more next run" and per-group failures
 (`3 failed ("Home" as N9UNX/P: TQSL: Invalid passphrase (15))`) when
 they apply.
 
-**Fetch path**: GET `lotw.arrl.org/lotwuser/lotwreport.adi` with
-`login=...&password=...&qso_query=1&qso_qsldetail=yes` → ADIF response →
-match against local QSOs by `station_callsign + call + date + band + mode`
-→ `mark_upload_verified` for matches; `mark_confirmed` if `QSL_RCVD=Y`.
+**Sync path** (incremental): two GETs to
+`lotw.arrl.org/lotwuser/lotwreport.adi`, both with
+`login=...&password=...&qso_query=1&qso_withown=yes`:
 
-Single Update click does upload-then-fetch. The fetch endpoint reflects
-both verification (LotW has the QSO) and confirmation (other station
-matched) in one round-trip.
+- confirmations — `qso_qsl=yes&qso_qsldetail=yes&qso_qslsince=<watermark>`;
+- accepted uploads — `qso_qsl=no&qso_qsorxsince=<watermark>`.
+
+Each report's header carries the value to send next time
+(`APP_LoTW_LASTQSL` / `APP_LoTW_LASTQSORX`); slogger stores it verbatim
+per report in `service_sync_watermarks` and sends it back, so a routine
+sync downloads only what changed. With no stored value (first sync) or on
+a full resync it sends `1900-01-01` — never an empty `since`, which LoTW
+would replace with a value it remembers server-side. A report's watermark
+advances only in the same transaction that stores its results, and only
+when it returned records; one report failing doesn't stop the other.
+LoTW's comparison is inclusive, so the boundary record comes back each
+time; applying a record twice changes nothing.
+
+Matching: worked call + band + station callsign (from `qso_withown`), and
+start times within ±5 minutes. Pairs are taken nearest in time first
+(ties: same mode, then same mode group), one record per QSO, so two QSOs
+with the same station on the same band and day each get their own
+record. Mode is never required. Soft-deleted QSOs never match. Every
+matched record marks the QSO upload-verified; `QSL_RCVD=Y` marks it
+confirmed (`confirmed_at` from `QSLRDATE`, else `APP_LoTW_RXQSL`, else
+now). Nothing is downgraded. `CREDIT_GRANTED` / `CREDIT_SUBMITTED` on a
+confirmation become award credit on the QSO (added once; submitted raised
+to granted later). All changes from one report are one transaction.
+
+An HTML page instead of ADIF (LoTW's way of reporting a failed query) is
+shown as a short message; records without the closing `<APP_LoTW_EOF>`
+are treated as a cut-off download and nothing from that report is
+applied. Summary, e.g. `sync: 3 new confirmations · 12 uploads verified ·
+1 not in log` ("not in log" = QSOs at LoTW with no match here, e.g.
+uploaded from another logger).
+
+Update services does upload-then-sync. **Full LoTW resync** (QSL tab)
+runs the sync alone, ignoring the stored watermarks, for when the log and
+LoTW have drifted apart (restored database, QSOs edited after upload).
 
 #### `[eqsl]`
 

@@ -196,8 +196,15 @@ fn view_services_pane(app: &App) -> Element<'_, Message> {
             btn.on_press(Message::ServicesUpdatePressed)
         }
     };
+    // Update reads only what changed at LoTW since the last sync; this
+    // reads everything again.
+    let resync_btn = button(text("Full LoTW resync"))
+        .style(button::secondary)
+        .on_press_maybe((!app.syncing).then_some(Message::LotwFullResyncPressed));
 
-    column![col, update_btn].spacing(8).into()
+    column![col, row![update_btn, resync_btn].spacing(8)]
+        .spacing(8)
+        .into()
 }
 
 fn pending_count_for(app: &App, svc: QslService) -> usize {
@@ -231,11 +238,11 @@ fn describe_last_outcome(app: &App, svc: QslService) -> String {
                 }
                 if let Some(f) = &s.fetch {
                     parts.push(format!(
-                        "fetch {} verified / {} confirmed",
-                        f.verified, f.confirmed
+                        "sync {}",
+                        crate::app::services::format_lotw_fetch(f)
                     ));
                 } else if let Some(e) = &s.fetch_error {
-                    parts.push(format!("fetch error: {e}"));
+                    parts.push(format!("sync error: {e}"));
                 }
                 if parts.is_empty() {
                     "nothing to do".into()

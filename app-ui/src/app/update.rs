@@ -23,7 +23,7 @@ use super::modals::station::{self, StationEditor, StationEditorMsg};
 use super::theme;
 use super::message::{DupeMatch, LogbookSearchResult, Message};
 use super::panels::Panels;
-use super::services::{format_multi_summary, run_services_update};
+use super::services::{format_lotw_fetch, format_multi_summary, run_lotw_sync, run_services_update};
 use super::spots::{SpotSort, build_worked_by_band};
 use super::state::{App, EntryDraft};
 
@@ -390,6 +390,28 @@ impl App {
                 // counts, etc.) without losing it the next time
                 // self.status is overwritten.
                 self.last_services_update = Some(summary);
+                self.refresh_task()
+            }
+            Message::LotwFullResyncPressed => self.start_lotw_full_resync(),
+            Message::LotwFullResyncFinished(result) => {
+                self.syncing = false;
+                self.status = Some(match &result {
+                    Ok(f) => format!("LoTW: {}", format_lotw_fetch(f)),
+                    Err(e) => format!("LoTW full resync failed: {e}"),
+                });
+                // The QSL view's LoTW row shows the latest sync; the
+                // upload part of the last update still stands.
+                if let Some(lotw) = self
+                    .last_services_update
+                    .as_mut()
+                    .and_then(|s| s.lotw.as_mut())
+                {
+                    lotw.fetch_skipped_reason = None;
+                    (lotw.fetch, lotw.fetch_error) = match result {
+                        Ok(f) => (Some(f), None),
+                        Err(e) => (None, Some(e)),
+                    };
+                }
                 self.refresh_task()
             }
             Message::StationLocationSelected(opt) => self.select_station_location(opt.id),
@@ -1497,6 +1519,33 @@ impl App {
         Task::perform(
             run_services_update(repo, station_repo, cfg),
             Message::ServicesUpdateFinished,
+        )
+    }
+
+    /// LoTW sync from the beginning, ignoring the stored watermarks: for
+    /// when the log and LoTW have drifted apart (a restored database, QSOs
+    /// edited after upload). Uploads and other services aren't touched.
+    fn start_lotw_full_resync(&mut self) -> Task<Message> {
+        let Some(repo) = self.repo.clone() else {
+            return Task::none();
+        };
+        let Some(cfg) = self.config.clone() else {
+            self.status = Some("config not loaded".into());
+            return Task::none();
+        };
+        if !cfg.lotw.is_configured_for_fetch() {
+            self.status =
+                Some("LoTW sync needs [lotw] username and password in config.toml".into());
+            return Task::none();
+        }
+        if self.syncing {
+            return Task::none();
+        }
+        self.syncing = true;
+        self.status = Some("LoTW full resync: reading everything LoTW holds…".into());
+        Task::perform(
+            async move { run_lotw_sync(repo, &cfg.lotw, true).await },
+            Message::LotwFullResyncFinished,
         )
     }
 }

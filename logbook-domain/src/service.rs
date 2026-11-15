@@ -269,32 +269,6 @@ impl LogbookService {
         report
     }
 
-    /// Returns true if a QSO matching the command's canonical keys
-    /// (station_callsign + call + UTC date + band + mode) already exists.
-    /// Skips the check when station_callsign is missing — without it we
-    /// can't match correctly and would get false positives across
-    /// different operators.
-    #[allow(dead_code)]
-    async fn is_duplicate(&self, cmd: &CreateQsoCommand) -> RepoResult<bool> {
-        let Some(station) = cmd.station_callsign.as_ref() else {
-            return Ok(false);
-        };
-        let date = cmd.qso_begin.format("%Y-%m-%d").to_string();
-        let band = cmd.band.map(|b| b.as_adif());
-        let mode = cmd.mode.as_ref().map(|m| m.as_adif().to_string());
-        let mode_ref = mode.as_deref();
-        self.repo
-            .find_match_for_confirmation(
-                station.as_str(),
-                cmd.call.as_str(),
-                &date,
-                band,
-                mode_ref,
-            )
-            .await
-            .map(|m| m.is_some())
-    }
-
     pub async fn search_qsos(&self, query: QsoSearch) -> RepoResult<Vec<QsoSummary>> {
         self.repo.search_qsos(query).await
     }
@@ -584,7 +558,12 @@ fn imported_field((name, raw_value): (String, String)) -> QsoExchangeField {
 fn imported_credit(qso: &Qso, credit: AwardCredit) -> ImportedCredit {
     ImportedCredit {
         qso_id: qso.id,
-        unit: credit_unit(&credit.award, qso),
+        unit: credit_unit(
+            &credit.award,
+            qso.dxcc_id,
+            qso.state.as_deref(),
+            qso.grid.as_deref(),
+        ),
         credit,
         call: qso.call.as_str().to_string(),
         qso_date: qso.qso_begin.format("%Y-%m-%d").to_string(),
@@ -596,15 +575,18 @@ fn imported_credit(qso: &Qso, credit: AwardCredit) -> ImportedCredit {
 /// What an award counts: the DXCC entity for the DXCC family (DXCC,
 /// DXCC_BAND, DXCC_MODE), the state for WAS, the four-character grid
 /// square for VUCC. Empty for awards slogger has no unit for.
-fn credit_unit(award: &str, qso: &Qso) -> String {
+pub(crate) fn credit_unit(
+    award: &str,
+    dxcc_id: Option<u16>,
+    state: Option<&str>,
+    grid: Option<&str>,
+) -> String {
     let unit = if award.starts_with("DXCC") {
-        qso.dxcc_id.map(|id| id.to_string())
+        dxcc_id.map(|id| id.to_string())
     } else if award == "WAS" {
-        qso.state.clone()
+        state.map(String::from)
     } else if award.starts_with("VUCC") {
-        qso.grid
-            .as_deref()
-            .map(|g| g.chars().take(4).collect::<String>().to_ascii_uppercase())
+        grid.map(|g| g.chars().take(4).collect::<String>().to_ascii_uppercase())
     } else {
         None
     };

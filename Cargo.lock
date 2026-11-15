@@ -2307,7 +2307,6 @@ dependencies = [
 name = "lotw-sync"
 version = "0.1.0"
 dependencies = [
- "adif_parser",
  "chrono",
  "dirs",
  "reqwest",

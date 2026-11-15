@@ -1,12 +1,17 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use app_config::{ClubLogConfig, Config, EqslConfig, HrdlogConfig, LotwConfig, QrzConfig};
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use clublog_sync::{ClubLogConfig as ClubLogClientConfig, ClubLogUploadClient};
 use eqsl_sync::{EqslFetchClient, EqslFetchConfig, EqslUploadClient, EqslUploadConfig};
 use hrdlog_sync::{HrdlogConfig as HrdlogClientConfig, HrdlogUploadClient};
-use logbook_domain::{ExportOptions, QsoRepository, StationRepository, export_adif};
-use lotw_sync::{LotwFetchClient, LotwFetchConfig};
+use logbook_domain::credit::parse_credit_list;
+use logbook_domain::{
+    CreditStatus, ExportOptions, QsoRepository, ServiceQso, StationRepository, SyncOutcome,
+    apply_report, export_adif,
+};
+use lotw_sync::{LotwFetchClient, LotwFetchConfig, LotwRecord, LotwReportKind, SINCE_BEGINNING};
 use qrz_sync::{QrzConfig as QrzClientConfig, QrzUploadClient};
 use radio_core::StationLocation;
 
@@ -68,11 +73,8 @@ pub(super) async fn run_services_update(
     }
 }
 
-/// One round-trip to LotW that updates both `upload_state` (to verified)
-/// and `confirmation_state` (where qsl_rcvd=Y). LotW returns every QSO in
-/// our account; presence alone proves the upload landed, and the
-/// `QSL_RCVD` per-record flag tells us whether the other station also has
-/// matching QSOs.
+/// LoTW's part of an update: upload what's pending, then read back what
+/// LoTW has accepted and confirmed since the last sync.
 async fn run_lotw_update(
     repo: Arc<dyn QsoRepository>,
     locations: &[StationLocation],
@@ -91,7 +93,7 @@ async fn run_lotw_update(
     }
 
     if cfg.is_configured_for_fetch() {
-        match run_lotw_sync(repo, cfg).await {
+        match run_lotw_sync(repo, &cfg, false).await {
             Ok(f) => summary.fetch = Some(f),
             Err(e) => summary.fetch_error = Some(e),
         }
@@ -102,77 +104,117 @@ async fn run_lotw_update(
     summary
 }
 
-async fn run_lotw_sync(
+/// Read both LoTW reports and apply them. Incremental unless
+/// `full_resync`, which ignores the stored watermarks and reads
+/// everything (then stores fresh ones).
+///
+/// The reports are independent: one failing leaves the other's results
+/// and watermark in place. `Err` only when both fail.
+pub(super) async fn run_lotw_sync(
     repo: Arc<dyn QsoRepository>,
-    cfg: LotwConfig,
+    cfg: &LotwConfig,
+    full_resync: bool,
 ) -> Result<FetchSummary, String> {
-    let username = cfg
-        .username
-        .clone()
-        .ok_or_else(|| "missing [lotw].username".to_string())?;
-    let password = cfg
-        .password
-        .clone()
-        .ok_or_else(|| "missing [lotw].password".to_string())?;
+    let (Some(username), Some(password)) = (cfg.username.clone(), cfg.password.clone()) else {
+        return Err("missing [lotw].username/password".into());
+    };
     let client = LotwFetchClient::new(LotwFetchConfig::new(username, password));
-    // only_confirmed=false → return all QSOs at LotW so we can verify uploads.
-    let records = client
-        .fetch(None, false)
-        .await
-        .map_err(|e| e.to_string())?;
 
-    let fetched = records.len();
-    let now = Utc::now();
-    let mut verified = 0usize;
-    let mut confirmed = 0usize;
-    let mut unmatched = 0usize;
-    for rec in records {
-        let Some(station) = rec.station_callsign.as_deref() else {
-            unmatched += 1;
-            continue;
-        };
-        let qso_id = repo
-            .find_match_for_confirmation(
-                station,
-                &rec.worked_callsign,
-                &rec.qso_date,
-                rec.band.as_deref(),
-                rec.mode.as_deref(),
-            )
-            .await
-            .map_err(|e| e.to_string())?;
-        match qso_id {
-            Some(id) => {
-                if let Err(e) = repo
-                    .mark_upload_verified(&id, LOTW_SERVICE, now, None)
-                    .await
-                {
-                    tracing::warn!(qso_id = %id, error = %e, "failed to mark verified");
-                    unmatched += 1;
-                    continue;
-                }
-                verified += 1;
-                if rec.qsl_rcvd {
-                    let confirmed_at = rec.qsl_rdate.unwrap_or(now);
-                    if let Err(e) = repo
-                        .mark_confirmed(&id, LOTW_SERVICE, confirmed_at, None)
-                        .await
-                    {
-                        tracing::warn!(qso_id = %id, error = %e, "failed to mark confirmed");
-                    } else {
-                        confirmed += 1;
-                    }
+    let mut summary = FetchSummary {
+        full_resync,
+        ..Default::default()
+    };
+    // A QSO LoTW has but the log doesn't can turn up in both reports;
+    // count it once.
+    let mut not_in_log: HashSet<(Option<String>, String, Option<String>, DateTime<Utc>)> =
+        HashSet::new();
+    for kind in [LotwReportKind::Confirmations, LotwReportKind::Uploads] {
+        match sync_lotw_report(repo.as_ref(), &client, kind, full_resync).await {
+            Ok((records, outcome, unreadable)) => {
+                summary.new_confirmations += outcome.newly_confirmed;
+                summary.uploads_verified += outcome.newly_verified;
+                summary.credits += outcome.credits_changed;
+                summary.unreadable += unreadable;
+                for &i in &outcome.not_in_log {
+                    let r = &records[i];
+                    not_in_log.insert((
+                        r.station_callsign.clone(),
+                        r.call.clone(),
+                        r.band.clone(),
+                        r.start,
+                    ));
                 }
             }
-            None => unmatched += 1,
+            Err(e) => {
+                tracing::warn!(report = kind.label(), error = %e, "LoTW sync report failed");
+                summary.errors.push(format!("{} report failed: {e}", kind.label()));
+            }
         }
     }
-    Ok(FetchSummary {
-        fetched,
-        verified,
-        confirmed,
-        unmatched,
-    })
+    summary.not_in_log = not_in_log.len();
+    if summary.errors.len() == 2 {
+        return Err(summary.errors.join("; "));
+    }
+    Ok(summary)
+}
+
+/// Fetch one report since its watermark and apply it; the new watermark
+/// is stored in the same transaction as the results. Returns the records
+/// as matched, what applying them did, and how many were unreadable.
+async fn sync_lotw_report(
+    repo: &dyn QsoRepository,
+    client: &LotwFetchClient,
+    kind: LotwReportKind,
+    full_resync: bool,
+) -> Result<(Vec<ServiceQso>, SyncOutcome, usize), String> {
+    let stored = if full_resync {
+        None
+    } else {
+        repo.get_sync_watermark(LOTW_SERVICE, kind.watermark_key())
+            .await
+            .map_err(|e| format!("reading last sync point: {e}"))?
+    };
+    let since = stored.as_deref().unwrap_or(SINCE_BEGINNING);
+    let report = client.fetch(kind, since).await.map_err(|e| e.to_string())?;
+    let records: Vec<ServiceQso> = report.records.into_iter().map(service_qso).collect();
+    let outcome = apply_report(
+        repo,
+        LOTW_SERVICE,
+        &records,
+        kind.watermark_key(),
+        report.watermark,
+        Utc::now(),
+    )
+    .await
+    .map_err(|e| format!("storing results: {e}"))?;
+    Ok((records, outcome, report.unreadable))
+}
+
+/// An LoTW record in the shape the matcher takes. Credit lists use the
+/// ADIF award enumeration the importer reads too.
+fn service_qso(r: LotwRecord) -> ServiceQso {
+    let mut credits = Vec::new();
+    if let Some(list) = &r.credit_granted {
+        credits.extend(parse_credit_list(list, CreditStatus::Granted));
+    }
+    if let Some(list) = &r.credit_submitted {
+        credits.extend(parse_credit_list(list, CreditStatus::Submitted));
+    }
+    ServiceQso {
+        station_callsign: r.station_callsign,
+        call: r.worked_callsign,
+        start: r.qso_start,
+        band: r.band,
+        mode: r.mode,
+        mode_group: r.mode_group,
+        confirmed: r.qsl_rcvd,
+        confirmed_at: r.qsl_rdate,
+        uploaded_at: r.rx_qso,
+        credits,
+        dxcc_id: r.dxcc,
+        state: r.state,
+        grid: r.gridsquare,
+    }
 }
 
 async fn run_eqsl_update(repo: Arc<dyn QsoRepository>, cfg: EqslConfig) -> EqslUpdateSummary {
@@ -482,10 +524,7 @@ fn format_lotw_summary(s: &UpdateSummary) -> String {
         parts.push(format!("upload skip ({r})"));
     }
     if let Some(f) = &s.fetch {
-        parts.push(format!(
-            "sync {}/{} verified, {} confirmed, {} unmatched",
-            f.verified, f.fetched, f.confirmed, f.unmatched
-        ));
+        parts.push(format!("sync: {}", format_lotw_fetch(f)));
     } else if let Some(e) = &s.fetch_error {
         parts.push(format!("sync error: {e}"));
     } else if let Some(r) = &s.fetch_skipped_reason {
@@ -496,6 +535,30 @@ fn format_lotw_summary(s: &UpdateSummary) -> String {
     } else {
         parts.join(", ")
     }
+}
+
+/// One line for a LoTW sync, e.g. `3 new confirmations · 12 uploads
+/// verified · 1 not in log`. "Not in log" is QSOs LoTW holds that match
+/// nothing here — expected when QSOs were uploaded from elsewhere.
+pub(super) fn format_lotw_fetch(f: &FetchSummary) -> String {
+    let count = |n: usize, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
+    let mut parts = Vec::new();
+    if f.full_resync {
+        parts.push("full resync".to_string());
+    }
+    parts.push(count(f.new_confirmations, "new confirmation", "new confirmations"));
+    parts.push(count(f.uploads_verified, "upload verified", "uploads verified"));
+    if f.not_in_log > 0 {
+        parts.push(format!("{} not in log", f.not_in_log));
+    }
+    if f.credits > 0 {
+        parts.push(count(f.credits, "award credit updated", "award credits updated"));
+    }
+    if f.unreadable > 0 {
+        parts.push(count(f.unreadable, "record unreadable", "records unreadable"));
+    }
+    parts.extend(f.errors.iter().cloned());
+    parts.join(" · ")
 }
 
 fn format_eqsl_summary(s: &EqslUpdateSummary) -> String {
@@ -562,5 +625,58 @@ fn format_hrdlog_summary(s: &HrdlogUpdateSummary) -> String {
         format!("upload skip ({r})")
     } else {
         "nothing to do".into()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lotw_record_credit_lists_become_award_credit() {
+        let body = "<EOH><STATION_CALLSIGN:5>K1ABC<CALL:4>W1AW<BAND:3>20M<MODE:2>CW\
+            <QSO_DATE:8>20260508<TIME_ON:4>1830<QSL_RCVD:1>Y\
+            <CREDIT_GRANTED:19>DXCC:LOTW,DXCC_BAND<CREDIT_SUBMITTED:8>WAS:LOTW\
+            <APP_LoTW_CREDIT_GRANTED:4>DXCC<EOR><APP_LoTW_EOF>";
+        let report = lotw_sync::fetch::parse_report(body, LotwReportKind::Confirmations).unwrap();
+        let q = service_qso(report.records.into_iter().next().unwrap());
+        assert!(q.confirmed);
+        let got: Vec<(&str, Option<&str>, CreditStatus)> = q
+            .credits
+            .iter()
+            .map(|c| (c.award.as_str(), c.medium.as_deref(), c.status))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                ("DXCC", Some("LOTW"), CreditStatus::Granted),
+                ("DXCC_BAND", None, CreditStatus::Granted),
+                ("WAS", Some("LOTW"), CreditStatus::Submitted),
+            ]
+        );
+    }
+
+    #[test]
+    fn lotw_summary_says_what_happened_in_plain_terms() {
+        let mut f = FetchSummary {
+            new_confirmations: 3,
+            uploads_verified: 12,
+            not_in_log: 1,
+            ..Default::default()
+        };
+        assert_eq!(
+            format_lotw_fetch(&f),
+            "3 new confirmations · 12 uploads verified · 1 not in log"
+        );
+        f.full_resync = true;
+        f.new_confirmations = 1;
+        f.uploads_verified = 0;
+        f.credits = 2;
+        f.errors.push("uploads report failed: HTTP error: timed out".into());
+        assert_eq!(
+            format_lotw_fetch(&f),
+            "full resync · 1 new confirmation · 0 uploads verified · 1 not in log · \
+             2 award credits updated · uploads report failed: HTTP error: timed out"
+        );
     }
 }

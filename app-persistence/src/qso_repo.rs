@@ -4,9 +4,9 @@ use sqlx::{Row, SqlitePool};
 use uuid::Uuid;
 
 use logbook_domain::{
-    AwardCredit, AwardQso, CreditStatus, DedupKey, ImportBatch, LocationFilter,
+    AwardCredit, AwardQso, CreditStatus, DedupKey, ImportBatch, ImportedCredit, LocationFilter,
     PendingUploadCount, QsoRepository, QsoSearch, QsoServiceState, QsoSummary, RepoResult,
-    RepositoryError,
+    RepositoryError, SyncBatch, SyncCandidate,
 };
 use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
@@ -253,6 +253,96 @@ fn credit_raw_json(credit: &AwardCredit) -> String {
         credit.medium.as_deref().map(json_str).unwrap_or_else(|| "null".into()),
         json_str(credit.status.as_storage_str()),
     )
+}
+
+/// Award credit rows for `credits`: an `award_credit_imports` row per
+/// credit, linked to its QSO by an `award_credit_links` row, creating
+/// each award's `award_definitions` row on first sight. Shared by ADIF
+/// import and service sync.
+async fn insert_credits(
+    conn: &mut sqlx::SqliteConnection,
+    credits: &[ImportedCredit],
+    now: &str,
+) -> RepoResult<()> {
+    if credits.is_empty() {
+        return Ok(());
+    }
+    // One award_definitions row per award name, created on first sight;
+    // the definition itself (rules, units) isn't known from an ADIF
+    // credit list, hence the empty JSON.
+    let mut names: Vec<&str> = credits.iter().map(|c| c.credit.award.as_str()).collect();
+    names.sort_unstable();
+    names.dedup();
+    for name in names {
+        sqlx::query(
+            r#"
+            INSERT INTO award_definitions
+                (id, name, version, definition_json, created_at, updated_at)
+            VALUES (?, ?, '1', '{}', ?, ?)
+            ON CONFLICT(name) DO NOTHING
+            "#,
+        )
+        .bind(fmt_id(Uuid::new_v4()))
+        .bind(name)
+        .bind(now)
+        .bind(now)
+        .execute(&mut *conn)
+        .await
+        .map_err(map_err)?;
+    }
+    let award_ids: HashMap<String, String> = sqlx::query("SELECT id, name FROM award_definitions")
+        .fetch_all(&mut *conn)
+        .await
+        .map_err(map_err)?
+        .iter()
+        .map(|row| Ok((row.try_get("name")?, row.try_get("id")?)))
+        .collect::<Result<_, sqlx::Error>>()
+        .map_err(map_err)?;
+
+    for c in credits {
+        let import_id = fmt_id(Uuid::new_v4());
+        sqlx::query(
+            r#"
+            INSERT INTO award_credit_imports
+                (id, award_id, call, qso_date, band, mode, unit,
+                 raw_json, imported_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(&import_id)
+        .bind(&award_ids[&c.credit.award])
+        .bind(&c.call)
+        .bind(&c.qso_date)
+        .bind(&c.band)
+        .bind(&c.mode)
+        .bind(&c.unit)
+        .bind(credit_raw_json(&c.credit))
+        .bind(now)
+        .execute(&mut *conn)
+        .await
+        .map_err(map_err)?;
+        sqlx::query(
+            r#"
+            INSERT INTO award_credit_links (id, credit_import_id, qso_id, link_status)
+            VALUES (?, ?, ?, ?)
+            "#,
+        )
+        .bind(fmt_id(Uuid::new_v4()))
+        .bind(&import_id)
+        .bind(fmt_id(c.qso_id.as_uuid()))
+        .bind(c.credit.status.as_storage_str())
+        .execute(&mut *conn)
+        .await
+        .map_err(map_err)?;
+    }
+    Ok(())
+}
+
+/// Rows per `IN (...)` list: well under SQLite's bound-parameter limit.
+const IN_CHUNK: usize = 500;
+
+fn placeholders(n: usize) -> String {
+    vec!["?"; n].join(", ")
 }
 
 #[derive(Debug)]
@@ -1165,80 +1255,199 @@ impl QsoRepository for SqliteQsoRepository {
             .map_err(map_err)?;
         }
 
-        if !batch.credits.is_empty() {
-            // One award_definitions row per award name, created on first
-            // sight; the definition itself (rules, units) isn't known
-            // from an ADIF credit list, hence the empty JSON.
-            let mut names: Vec<&str> = batch.credits.iter().map(|c| c.credit.award.as_str()).collect();
-            names.sort_unstable();
-            names.dedup();
-            for name in names {
-                sqlx::query(
-                    r#"
-                    INSERT INTO award_definitions
-                        (id, name, version, definition_json, created_at, updated_at)
-                    VALUES (?, ?, '1', '{}', ?, ?)
-                    ON CONFLICT(name) DO NOTHING
-                    "#,
-                )
-                .bind(fmt_id(Uuid::new_v4()))
-                .bind(name)
-                .bind(&now)
-                .bind(&now)
-                .execute(&mut *tx)
-                .await
-                .map_err(map_err)?;
-            }
-            let award_ids: HashMap<String, String> =
-                sqlx::query("SELECT id, name FROM award_definitions")
-                    .fetch_all(&mut *tx)
-                    .await
-                    .map_err(map_err)?
-                    .iter()
-                    .map(|row| Ok((row.try_get("name")?, row.try_get("id")?)))
-                    .collect::<Result<_, sqlx::Error>>()
-                    .map_err(map_err)?;
+        insert_credits(&mut tx, &batch.credits, &now).await?;
 
-            for c in &batch.credits {
-                let import_id = fmt_id(Uuid::new_v4());
-                sqlx::query(
-                    r#"
-                    INSERT INTO award_credit_imports
-                        (id, award_id, call, qso_date, band, mode, unit,
-                         raw_json, imported_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    "#,
-                )
-                .bind(&import_id)
-                .bind(&award_ids[&c.credit.award])
-                .bind(&c.call)
-                .bind(&c.qso_date)
-                .bind(&c.band)
-                .bind(&c.mode)
-                .bind(&c.unit)
-                .bind(credit_raw_json(&c.credit))
-                .bind(&now)
-                .execute(&mut *tx)
-                .await
-                .map_err(map_err)?;
-                sqlx::query(
-                    r#"
-                    INSERT INTO award_credit_links (id, credit_import_id, qso_id, link_status)
-                    VALUES (?, ?, ?, ?)
-                    "#,
-                )
-                .bind(fmt_id(Uuid::new_v4()))
-                .bind(&import_id)
-                .bind(fmt_id(c.qso_id.as_uuid()))
-                .bind(c.credit.status.as_storage_str())
-                .execute(&mut *tx)
-                .await
-                .map_err(map_err)?;
+        tx.commit().await.map_err(map_err)?;
+        Ok(())
+    }
+
+    async fn load_sync_candidates(
+        &self,
+        service: &str,
+        calls: &[String],
+    ) -> RepoResult<Vec<SyncCandidate>> {
+        let mut out = Vec::new();
+        for chunk in calls.chunks(IN_CHUNK) {
+            let sql = format!(
+                "SELECT q.id, q.call, q.station_callsign, q.qso_begin, q.band, q.mode,
+                        q.dxcc_id, q.state, q.grid,
+                        COALESCE(s.upload_state = 'verified', 0) AS verified,
+                        COALESCE(s.confirmation_state = 'confirmed', 0) AS confirmed
+                 FROM qsos q
+                 LEFT JOIN qso_service_state s ON s.qso_id = q.id AND s.service = ?
+                 WHERE q.deleted_at IS NULL AND q.call IN ({})",
+                placeholders(chunk.len())
+            );
+            let mut query = sqlx::query(&sql).bind(service);
+            for call in chunk {
+                query = query.bind(call);
             }
+            let rows = query.fetch_all(&self.pool).await.map_err(map_err)?;
+            for row in &rows {
+                let id: String = row.try_get("id").map_err(map_err)?;
+                let begin: String = row.try_get("qso_begin").map_err(map_err)?;
+                let dxcc_id: Option<i64> = row.try_get("dxcc_id").map_err(map_err)?;
+                let verified: i64 = row.try_get("verified").map_err(map_err)?;
+                let confirmed: i64 = row.try_get("confirmed").map_err(map_err)?;
+                out.push(SyncCandidate {
+                    qso_id: QsoId::from_uuid(parse_uuid(&id)?),
+                    call: row.try_get("call").map_err(map_err)?,
+                    station_callsign: row.try_get("station_callsign").map_err(map_err)?,
+                    qso_begin: parse_dt(&begin)?,
+                    band: row.try_get("band").map_err(map_err)?,
+                    mode: row.try_get("mode").map_err(map_err)?,
+                    dxcc_id: dxcc_id.map(|v| v as u16),
+                    state: row.try_get("state").map_err(map_err)?,
+                    grid: row.try_get("grid").map_err(map_err)?,
+                    upload_verified: verified != 0,
+                    confirmed: confirmed != 0,
+                });
+            }
+        }
+        Ok(out)
+    }
+
+    async fn list_credits_for(
+        &self,
+        qso_ids: &[QsoId],
+    ) -> RepoResult<HashMap<QsoId, Vec<AwardCredit>>> {
+        let mut out: HashMap<QsoId, Vec<AwardCredit>> = HashMap::new();
+        for chunk in qso_ids.chunks(IN_CHUNK) {
+            // Same shape and order as list_credits.
+            let sql = format!(
+                "SELECT l.qso_id, d.name AS award,
+                        json_extract(i.raw_json, '$.medium') AS medium,
+                        l.link_status
+                 FROM award_credit_links l
+                 JOIN award_credit_imports i ON i.id = l.credit_import_id
+                 JOIN award_definitions d ON d.id = i.award_id
+                 WHERE l.qso_id IN ({})
+                 ORDER BY l.rowid",
+                placeholders(chunk.len())
+            );
+            let mut query = sqlx::query(&sql);
+            for id in chunk {
+                query = query.bind(fmt_id(id.as_uuid()));
+            }
+            let rows = query.fetch_all(&self.pool).await.map_err(map_err)?;
+            for row in &rows {
+                let status: String = row.try_get("link_status").map_err(map_err)?;
+                let Some(status) = CreditStatus::parse_storage(&status) else {
+                    continue;
+                };
+                let qso_id: String = row.try_get("qso_id").map_err(map_err)?;
+                out.entry(QsoId::from_uuid(parse_uuid(&qso_id)?))
+                    .or_default()
+                    .push(AwardCredit {
+                        award: row.try_get("award").map_err(map_err)?,
+                        medium: row.try_get("medium").map_err(map_err)?,
+                        status,
+                    });
+            }
+        }
+        Ok(out)
+    }
+
+    async fn apply_sync_batch(&self, batch: &SyncBatch) -> RepoResult<()> {
+        // One transaction for the whole report, like insert_qsos_batch.
+        let mut tx = self.pool.begin().await.map_err(map_err)?;
+        let now = fmt_dt(&Utc::now());
+
+        for s in &batch.states {
+            // mark_upload_verified + mark_confirmed in one statement, with
+            // nothing downgraded: the upload state only ever rises to
+            // verified, confirmation is only ever set, and an existing
+            // confirmation keeps its date.
+            let confirmation = if s.confirmed_at.is_some() { "confirmed" } else { "pending" };
+            sqlx::query(
+                r#"
+                INSERT INTO qso_service_state
+                    (id, qso_id, service, upload_state, confirmation_state,
+                     uploaded_at, confirmed_at, last_sync_at, created_at, updated_at)
+                VALUES (?, ?, ?, 'verified', ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(qso_id, service) DO UPDATE SET
+                    upload_state = 'verified',
+                    uploaded_at = COALESCE(qso_service_state.uploaded_at, excluded.uploaded_at),
+                    confirmed_at = CASE
+                        WHEN excluded.confirmation_state = 'confirmed'
+                             AND qso_service_state.confirmation_state <> 'confirmed'
+                        THEN excluded.confirmed_at
+                        ELSE qso_service_state.confirmed_at END,
+                    confirmation_state = CASE
+                        WHEN excluded.confirmation_state = 'confirmed' THEN 'confirmed'
+                        ELSE qso_service_state.confirmation_state END,
+                    last_sync_at = excluded.last_sync_at,
+                    last_error = NULL,
+                    updated_at = excluded.updated_at
+                "#,
+            )
+            .bind(fmt_id(Uuid::new_v4()))
+            .bind(fmt_id(s.qso_id.as_uuid()))
+            .bind(&batch.service)
+            .bind(confirmation)
+            .bind(fmt_dt(&s.uploaded_at))
+            .bind(s.confirmed_at.as_ref().map(fmt_dt))
+            .bind(&now)
+            .bind(&now)
+            .bind(&now)
+            .execute(&mut *tx)
+            .await
+            .map_err(map_err)?;
+        }
+
+        insert_credits(&mut tx, &batch.new_credits, &now).await?;
+
+        for u in &batch.credit_upgrades {
+            sqlx::query(
+                r#"
+                UPDATE award_credit_links SET link_status = 'granted'
+                WHERE qso_id = ? AND link_status = 'submitted'
+                  AND credit_import_id IN (
+                      SELECT i.id FROM award_credit_imports i
+                      JOIN award_definitions d ON d.id = i.award_id
+                      WHERE d.name = ? AND json_extract(i.raw_json, '$.medium') IS ?)
+                "#,
+            )
+            .bind(fmt_id(u.qso_id.as_uuid()))
+            .bind(&u.award)
+            .bind(&u.medium)
+            .execute(&mut *tx)
+            .await
+            .map_err(map_err)?;
+        }
+
+        if let Some(w) = &batch.watermark {
+            sqlx::query(
+                r#"
+                INSERT INTO service_sync_watermarks (service, report, value, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(service, report) DO UPDATE SET
+                    value = excluded.value,
+                    updated_at = excluded.updated_at
+                "#,
+            )
+            .bind(&w.service)
+            .bind(&w.key)
+            .bind(&w.value)
+            .bind(&now)
+            .execute(&mut *tx)
+            .await
+            .map_err(map_err)?;
         }
 
         tx.commit().await.map_err(map_err)?;
         Ok(())
+    }
+
+    async fn get_sync_watermark(&self, service: &str, key: &str) -> RepoResult<Option<String>> {
+        sqlx::query_scalar(
+            "SELECT value FROM service_sync_watermarks WHERE service = ? AND report = ?",
+        )
+        .bind(service)
+        .bind(key)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(map_err)
     }
 }
 
@@ -2542,5 +2751,127 @@ Japan:                              25:  45:  AS:   36.24: -139.00:    -9.0:  JA
         .await
         .unwrap();
         assert_eq!(extras, ["APP_DXKEEPER_QRZCOM_LOGID", "LOTW_QSL_SENT", "QSL_SENT", "STX"]);
+    }
+
+    #[tokio::test]
+    async fn lotw_report_applies_once_per_qso_and_is_idempotent() {
+        use logbook_domain::credit::parse_credit_list;
+        use logbook_domain::{QsoRepository, ServiceQso, apply_report};
+
+        let (svc, db) = fresh_service_with_db().await;
+        let repo = svc_repo(&db);
+        let at = |h, m| Utc.with_ymd_and_hms(2026, 5, 8, h, m, 0).unwrap();
+        let qso = |call: &str, band, h, m| CreateQsoCommand {
+            band: Some(band),
+            mode: Some(Mode::CW),
+            station_callsign: Some(Callsign::parse("K1ABC").unwrap()),
+            dxcc_id: Some(291),
+            ..CreateQsoCommand::minimal(Callsign::parse(call).unwrap(), at(h, m))
+        };
+        // Same station, same band, same day, three minutes apart.
+        let first = svc.create_qso(qso("W1AW", Band::M20, 10, 0)).await.unwrap();
+        let second = svc.create_qso(qso("W1AW", Band::M20, 10, 3)).await.unwrap();
+        let deleted = svc.create_qso(qso("W1AW", Band::M40, 12, 0)).await.unwrap();
+        repo.soft_delete_qso(&deleted).await.unwrap();
+
+        let record = |band: &str, h, m, confirmed: bool| ServiceQso {
+            station_callsign: Some("K1ABC".into()),
+            call: "W1AW".into(),
+            start: at(h, m),
+            band: Some(band.into()),
+            mode: Some("CW".into()),
+            mode_group: Some("CW".into()),
+            confirmed,
+            confirmed_at: confirmed.then(|| at(20, 0)),
+            uploaded_at: Some(at(11, 0)),
+            credits: Vec::new(),
+            dxcc_id: Some(291),
+            state: None,
+            grid: None,
+        };
+        let mut second_rec = record("20M", 10, 3, true);
+        second_rec.credits = parse_credit_list("DXCC:LOTW", CreditStatus::Submitted);
+        let report = vec![
+            second_rec.clone(),
+            record("20M", 10, 0, false),
+            record("40M", 12, 0, true),
+        ];
+        let state = |id| {
+            let repo = &repo;
+            async move {
+                repo.list_service_states(&id)
+                    .await
+                    .unwrap()
+                    .into_iter()
+                    .map(|s| (s.upload_state, s.confirmation_state, s.confirmed_at))
+                    .collect::<Vec<_>>()
+            }
+        };
+
+        let out = apply_report(&repo, "lotw", &report, "qsl_since", Some("2026-05-09 01:02:03".into()), at(23, 0))
+            .await
+            .unwrap();
+        assert_eq!((out.newly_verified, out.newly_confirmed, out.credits_changed), (2, 1, 1));
+        // The soft-deleted QSO never matches.
+        assert_eq!(out.not_in_log, vec![2]);
+        assert_eq!(
+            state(second).await,
+            vec![("verified".into(), "confirmed".into(), Some(at(20, 0)))]
+        );
+        assert_eq!(state(first).await, vec![("verified".into(), "pending".into(), None)]);
+        assert!(state(deleted).await.is_empty());
+        assert_eq!(
+            repo.get_sync_watermark("lotw", "qsl_since").await.unwrap().as_deref(),
+            Some("2026-05-09 01:02:03")
+        );
+        assert_eq!(repo.get_sync_watermark("lotw", "qso_rx_since").await.unwrap(), None);
+
+        // The same report again (the boundary record always comes back):
+        // nothing changes, nothing is duplicated. Without a new watermark
+        // the stored one stays.
+        let out = apply_report(&repo, "lotw", &report, "qsl_since", None, at(23, 30))
+            .await
+            .unwrap();
+        assert_eq!((out.newly_verified, out.newly_confirmed, out.credits_changed), (0, 0, 0));
+        let links = || async {
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM award_credit_links")
+                .fetch_one(db.pool())
+                .await
+                .unwrap()
+        };
+        assert_eq!(links().await, 1);
+        assert_eq!(
+            repo.get_sync_watermark("lotw", "qsl_since").await.unwrap().as_deref(),
+            Some("2026-05-09 01:02:03")
+        );
+
+        // Not a confirmation any more (as the uploads report would say):
+        // still confirmed, date kept.
+        let unconfirmed = vec![record("20M", 10, 3, false)];
+        apply_report(&repo, "lotw", &unconfirmed, "qso_rx_since", Some("x".into()), at(23, 45))
+            .await
+            .unwrap();
+        assert_eq!(
+            state(second).await,
+            vec![("verified".into(), "confirmed".into(), Some(at(20, 0)))]
+        );
+
+        // DXCC is granted now: the submitted credit is raised, not doubled.
+        second_rec.credits = parse_credit_list("DXCC:LOTW", CreditStatus::Granted);
+        let out = apply_report(&repo, "lotw", &[second_rec], "qsl_since", None, at(23, 50))
+            .await
+            .unwrap();
+        assert_eq!(out.credits_changed, 1);
+        assert_eq!(links().await, 1);
+        let credits = repo.list_credits(&second).await.unwrap();
+        assert_eq!(credits.len(), 1);
+        assert_eq!(credits[0].award, "DXCC");
+        assert_eq!(credits[0].medium.as_deref(), Some("LOTW"));
+        assert_eq!(credits[0].status, CreditStatus::Granted);
+        let unit: String = sqlx::query_scalar("SELECT unit FROM award_credit_imports")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(unit, "291");
     }
 }

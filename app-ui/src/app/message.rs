@@ -29,6 +29,10 @@ pub enum Message {
     ImportFinished(Result<ImportSummary, String>),
     ServicesUpdatePressed,
     ServicesUpdateFinished(MultiUpdateSummary),
+    /// Read everything at LoTW again, ignoring where the last sync left
+    /// off. LoTW only: no uploads, no other services.
+    LotwFullResyncPressed,
+    LotwFullResyncFinished(Result<FetchSummary, String>),
     StationLocationSelected(StationOption),
     /// Open the station editor on the active location.
     EditStationPressed,
@@ -226,12 +230,24 @@ pub struct UploadSummary {
     pub note: String,
 }
 
-#[derive(Debug, Clone)]
+/// What a LoTW sync did across its two reports (confirmations, accepted
+/// uploads). Counts are of QSOs whose state changed, so a sync with
+/// nothing new reads all zeros.
+#[derive(Debug, Clone, Default)]
 pub struct FetchSummary {
-    pub fetched: usize,
-    pub verified: usize,
-    pub confirmed: usize,
-    pub unmatched: usize,
+    /// Stored watermarks were ignored and everything was read again.
+    pub full_resync: bool,
+    pub new_confirmations: usize,
+    pub uploads_verified: usize,
+    /// LoTW QSOs that match nothing in the log, counted once even when
+    /// both reports carry them.
+    pub not_in_log: usize,
+    /// Award credits added or raised from submitted to granted.
+    pub credits: usize,
+    /// Records LoTW sent without a call or a readable date and time.
+    pub unreadable: usize,
+    /// A report that failed while the other was applied.
+    pub errors: Vec<String>,
 }
 
 /// LoTW's part of a services update.

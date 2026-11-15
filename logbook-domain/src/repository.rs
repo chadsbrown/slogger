@@ -199,6 +199,77 @@ pub struct ImportBatch {
     pub credits: Vec<ImportedCredit>,
 }
 
+/// A local QSO a QSL service's record might describe, with where it
+/// already stands with that service. Loaded in bulk for a whole report
+/// by `QsoRepository::load_sync_candidates`.
+#[derive(Debug, Clone)]
+pub struct SyncCandidate {
+    pub qso_id: QsoId,
+    pub call: String,
+    pub station_callsign: Option<String>,
+    pub qso_begin: DateTime<Utc>,
+    pub band: Option<String>,
+    pub mode: Option<String>,
+    /// What award credit counts towards when the service doesn't say.
+    pub dxcc_id: Option<u16>,
+    pub state: Option<String>,
+    pub grid: Option<String>,
+    pub upload_verified: bool,
+    pub confirmed: bool,
+}
+
+/// One QSO's state change from a sync: always upload-verified, and
+/// confirmed when `confirmed_at` is set. Applied without downgrading
+/// anything already recorded.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SyncStateChange {
+    pub qso_id: QsoId,
+    /// When the service received the upload; kept only if the QSO has no
+    /// upload time yet.
+    pub uploaded_at: DateTime<Utc>,
+    pub confirmed_at: Option<DateTime<Utc>>,
+}
+
+/// An award credit already on a QSO as submitted that the service now
+/// reports granted. Identified by award and medium, like the credit
+/// list entry it came from.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CreditUpgrade {
+    pub qso_id: QsoId,
+    pub award: String,
+    pub medium: Option<String>,
+}
+
+/// Where a service's incremental report left off: the value to send as
+/// `since` next time, stored per (service, report).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SyncWatermark {
+    pub service: String,
+    pub key: String,
+    pub value: String,
+}
+
+/// Everything one service report changes, committed together by
+/// `QsoRepository::apply_sync_batch` — including the report's new
+/// watermark, so it only advances once the report's results are stored.
+#[derive(Debug, Clone, Default)]
+pub struct SyncBatch {
+    pub service: String,
+    pub states: Vec<SyncStateChange>,
+    pub new_credits: Vec<ImportedCredit>,
+    pub credit_upgrades: Vec<CreditUpgrade>,
+    pub watermark: Option<SyncWatermark>,
+}
+
+impl SyncBatch {
+    pub fn is_empty(&self) -> bool {
+        self.states.is_empty()
+            && self.new_credits.is_empty()
+            && self.credit_upgrades.is_empty()
+            && self.watermark.is_none()
+    }
+}
+
 /// How many QSOs at one station location are waiting for a service, split
 /// by whether they carry a station callsign. What an upload that can only
 /// send some locations' QSOs reports about the ones it holds back.
@@ -330,9 +401,10 @@ pub trait QsoRepository: std::fmt::Debug + Send + Sync {
     /// Rust on top of this — keeps SQL out of the awards layer.
     async fn list_award_qsos(&self) -> RepoResult<Vec<AwardQso>>;
 
-    /// Look up a QSO by the canonical match keys used by LotW and friends:
-    /// station callsign + worked callsign + UTC date + band + mode. Returns
-    /// at most one match — if multiple exist, the most recent qso_begin wins.
+    /// Look up a QSO by station callsign + worked callsign + UTC date +
+    /// band + mode — what the eQSL inbox fetch matches on. Returns at most
+    /// one match — if multiple exist, the most recent qso_begin wins.
+    /// (LoTW matches by time instead; see `qsl_sync::match_records`.)
     async fn find_match_for_confirmation(
         &self,
         station_call: &str,
@@ -345,7 +417,7 @@ pub trait QsoRepository: std::fmt::Debug + Send + Sync {
     /// One-shot load of every existing dedup key. Used by `import_qsos`
     /// to replace per-record dedup SELECTs with O(1) HashSet lookups.
     /// Only QSOs that aren't soft-deleted and have a `station_callsign`
-    /// (matching `is_duplicate` semantics) are returned.
+    /// (without one the key can't tell operators apart) are returned.
     async fn load_dedup_keys(&self) -> RepoResult<std::collections::HashSet<DedupKey>>;
 
     /// Every station location, oldest first — what `import_qsos` matches
@@ -362,6 +434,30 @@ pub trait QsoRepository: std::fmt::Debug + Send + Sync {
     /// bodies match the existing single-row methods; only the
     /// transaction wrapping differs.
     async fn insert_qsos_batch(&self, batch: &ImportBatch) -> RepoResult<()>;
+
+    /// Every QSO that isn't soft-deleted whose worked call is one of
+    /// `calls` (uppercase), with its state at `service`. One query per
+    /// chunk of calls, so matching a whole report costs a handful of
+    /// round trips rather than one per record.
+    async fn load_sync_candidates(
+        &self,
+        service: &str,
+        calls: &[String],
+    ) -> RepoResult<Vec<SyncCandidate>>;
+
+    /// Award credit on each of `qso_ids`, as `list_credits` returns it,
+    /// for many QSOs at once. QSOs with none are absent from the map.
+    async fn list_credits_for(
+        &self,
+        qso_ids: &[QsoId],
+    ) -> RepoResult<std::collections::HashMap<QsoId, Vec<AwardCredit>>>;
+
+    /// Write one sync report's changes and its watermark in a single
+    /// transaction.
+    async fn apply_sync_batch(&self, batch: &SyncBatch) -> RepoResult<()>;
+
+    /// The stored watermark for a service's report, if any.
+    async fn get_sync_watermark(&self, service: &str, key: &str) -> RepoResult<Option<String>>;
 }
 
 #[async_trait]
