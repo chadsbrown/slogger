@@ -509,6 +509,12 @@ dates. Each update:
    already holds is marked uploaded; it is never overwritten, since that
    would discard QRZ's confirmation of it.
 
+QRZ recognises a re-sent QSO only when its time agrees to the minute
+(seconds are ignored); one a minute out is added as a second record.
+Step 2 matches more loosely (within five minutes), which is what keeps
+QSOs already in the logbook from being sent again — so if step 2 fails,
+step 3 is skipped.
+
 `cargo run -p qrz-sync --example readonly_check -- <key-file>` checks a
 key against the live API without changing the logbook.
 

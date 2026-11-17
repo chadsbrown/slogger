@@ -407,7 +407,10 @@ const QRZ_WATERMARK_KEY: &str = "modified_since";
 ///
 /// Reading comes first so that QSOs already in the logbook — uploaded
 /// from another program, or before a database was rebuilt — are seen to
-/// be there and not sent again as duplicates.
+/// be there and not sent again. QRZ itself only catches a re-sent QSO
+/// when its time agrees to the minute (seconds are ignored); one a
+/// minute out is added as a second record. Matching what was read is
+/// more forgiving, so if the read fails nothing is uploaded.
 async fn run_qrz_update(repo: Arc<dyn QsoRepository>, cfg: QrzConfig) -> QrzUpdateSummary {
     let mut summary = QrzUpdateSummary::default();
     let Some(api_key) = cfg.api_key.clone() else {
@@ -434,8 +437,12 @@ async fn qrz_update_with(repo: &dyn QsoRepository, client: &QrzClient) -> QrzUpd
     match run_qrz_sync(repo, client).await {
         Ok(f) => summary.fetch = Some(f),
         Err(e) => {
-            tracing::warn!(error = %e, "QRZ sync failed");
+            // Without knowing what the logbook holds, uploading risks
+            // doubling QSOs: QRZ only recognises a duplicate when the
+            // time agrees to the minute, and adds anything else as new.
+            tracing::warn!(error = %e, "QRZ sync failed; not uploading");
             summary.fetch_error = Some(e);
+            return summary;
         }
     }
 
@@ -765,7 +772,7 @@ fn format_qrz_summary(s: &QrzUpdateSummary) -> String {
     if let Some(f) = &s.fetch {
         parts.push(format!("sync: {}", format_qrz_fetch(f)));
     } else if let Some(e) = &s.fetch_error {
-        parts.push(format!("sync error: {e}"));
+        parts.push(format!("sync error: {e} (nothing uploaded)"));
     }
     if s.uploaded + s.duplicates + s.rejected > 0 {
         let mut msg = format!("upload {} ok", s.uploaded);
@@ -920,11 +927,18 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
+    #[derive(Clone, Copy, PartialEq)]
+    enum Fake {
+        Working,
+        RefusesKey,
+        FetchFails,
+    }
+
     /// A stand-in for QRZ that answers by what it is asked: the status
     /// of K1ABC's logbook, a fetch holding one confirmed QSO with W1AW,
     /// and inserts that succeed, duplicate or fail by the call worked.
     /// Returns a client for it and the request bodies it received.
-    async fn fake_qrz(valid_key: bool) -> (QrzClient, Arc<Mutex<Vec<String>>>) {
+    async fn fake_qrz(behaviour: Fake) -> (QrzClient, Arc<Mutex<Vec<String>>>) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let seen = Arc::new(Mutex::new(Vec::new()));
@@ -954,10 +968,12 @@ mod tests {
                     }
                 };
                 seen2.lock().unwrap().push(body.clone());
-                let (status, answer) = if !valid_key {
+                let (status, answer) = if behaviour == Fake::RefusesKey {
                     (401, "STATUS=AUTH&RESULT=AUTH&REASON=invalid api key\n&EXTENDED=".to_string())
                 } else if body.contains("ACTION=STATUS") {
                     (200, "RESULT=OK&CALLSIGN=K1ABC&START_DATE=2020-01-01&END_DATE=2030-01-01".into())
+                } else if body.contains("ACTION=FETCH") && behaviour == Fake::FetchFails {
+                    (502, "<html>Bad Gateway</html>".into())
                 } else if body.contains("ACTION=FETCH") {
                     (200, "COUNT=1&RESULT=OK&ADIF=&lt;app_qrzlog_logid:2&gt;41&lt;station_callsign:5&gt;K1ABC\
                         &lt;call:4&gt;W1AW&lt;qso_date:8&gt;20260508&lt;time_on:4&gt;1830&lt;band:3&gt;20M\
@@ -1008,7 +1024,7 @@ mod tests {
     #[tokio::test]
     async fn qrz_update_syncs_then_uploads_and_records_each_qso_by_its_own_answer() {
         let (repo, id) = qrz_log().await;
-        let (client, seen_by) = fake_qrz(true).await;
+        let (client, seen_by) = fake_qrz(Fake::Working).await;
 
         let summary = qrz_update_with(repo.as_ref(), &client).await;
 
@@ -1083,7 +1099,7 @@ mod tests {
     #[tokio::test]
     async fn qrz_update_stops_at_a_refused_key_without_touching_the_log() {
         let (repo, _) = qrz_log().await;
-        let (client, seen) = fake_qrz(false).await;
+        let (client, seen) = fake_qrz(Fake::RefusesKey).await;
 
         let summary = qrz_update_with(repo.as_ref(), &client).await;
 
@@ -1095,6 +1111,20 @@ mod tests {
         assert_eq!(seen.lock().unwrap().len(), 1);
         let pending = repo.list_pending_uploads(QRZ_SERVICE, None).await.unwrap();
         assert_eq!(pending.len(), 5);
+    }
+
+    #[tokio::test]
+    async fn qrz_update_uploads_nothing_when_the_logbook_cannot_be_read() {
+        let (repo, _) = qrz_log().await;
+        let (client, seen) = fake_qrz(Fake::FetchFails).await;
+
+        let summary = qrz_update_with(repo.as_ref(), &client).await;
+
+        assert!(summary.fetch_error.is_some());
+        assert_eq!((summary.uploaded, summary.duplicates, summary.rejected), (0, 0, 0));
+        assert!(seen.lock().unwrap().iter().all(|b| !b.contains("ACTION=INSERT")));
+        assert_eq!(repo.list_pending_uploads(QRZ_SERVICE, None).await.unwrap().len(), 5);
+        assert!(format_qrz_summary(&summary).ends_with("(nothing uploaded)"));
     }
 
     #[tokio::test]

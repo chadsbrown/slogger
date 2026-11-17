@@ -367,7 +367,7 @@ Some(s) => {
                         f.new_confirmations, f.uploads_verified
                     ));
                 } else if let Some(e) = &s.fetch_error {
-                    parts.push(format!("sync error: {e}"));
+                    parts.push(format!("sync error: {e} (nothing uploaded)"));
                 }
                 if s.uploaded + s.duplicates + s.rejected > 0 {
                     parts.push(format!(
