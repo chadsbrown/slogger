@@ -32,7 +32,7 @@ so2r-control         OTRSP switch wrapper, set_tx/set_rx/set_aux
 lotw-sync            TQSL shellout + report fetch (verify + confirm)
 eqsl-sync            ImportADIF + DownloadInBox
 clublog-sync         realtime.php upload
-qrz-sync             logbook API per-record upload
+qrz-sync             logbook API: key check, per-record upload, confirmation download
 hrdlog-sync          NewEntry.aspx upload
 app-ui               iced 0.14 frontend (current dense single-window;
                      this is what gets redesigned)
@@ -117,7 +117,7 @@ Per-band/per-mode dimensions exist; UI can pivot.
 | LotW | upload (via TQSL) + verify + confirm | website pwd + cert via tqsl |
 | eQSL | upload + confirm | username + password |
 | Club Log | upload | email + password + callsign |
-| QRZ | upload (per-record) | api_key |
+| QRZ | upload (per-record) + confirmation download | api_key |
 | HRDLog | upload | callsign + upload code |
 
 All driven by `MultiUpdateSummary` from one `run_services_update(repo, cfg)`

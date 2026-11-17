@@ -6,3 +6,6 @@
 
 # A copy of TQSL's station location file, kept here for reference only.
 /station_data
+
+# QRZ logbook API key for manual testing — a credential, never commit.
+/qrz-logbook-api-key
