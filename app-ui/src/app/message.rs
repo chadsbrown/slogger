@@ -294,11 +294,37 @@ pub struct ClubLogUpdateSummary {
 
 #[derive(Debug, Clone, Default)]
 pub struct QrzUpdateSummary {
+    /// The station callsign the key's logbook serves.
+    pub book_callsign: Option<String>,
+    /// QSOs QRZ added to the logbook.
     pub uploaded: usize,
+    /// QSOs QRZ already held; now marked uploaded.
+    pub duplicates: usize,
     pub rejected: usize,
+    /// Pending QSOs not sent because they don't belong in this logbook:
+    /// another station callsign (or none), or a date outside its range.
+    pub held_back: usize,
+    /// What stopped the update: a refused key, or a failure part-way
+    /// through the upload.
     pub upload_error: Option<String>,
     pub upload_skipped_reason: Option<String>,
+    /// `CALL: reason` for the first few rejections.
     pub first_errors: Vec<String>,
+    pub fetch: Option<QrzFetchSummary>,
+    pub fetch_error: Option<String>,
+}
+
+/// What reading the QRZ logbook back did.
+#[derive(Debug, Clone, Default)]
+pub struct QrzFetchSummary {
+    /// The whole logbook was read (no earlier sync point).
+    pub full: bool,
+    pub records: usize,
+    pub new_confirmations: usize,
+    pub uploads_verified: usize,
+    /// Records QRZ holds that match no QSO in the log.
+    pub not_in_log: usize,
+    pub unreadable: usize,
 }
 
 #[derive(Debug, Clone, Default)]
