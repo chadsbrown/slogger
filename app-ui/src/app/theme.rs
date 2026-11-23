@@ -222,7 +222,9 @@ pub(super) struct Hues {
     pub(super) bad: Color,
 }
 
-/// How a theme shows a status.
+/// How a theme shows a status. Every shipped theme fills a cell; the
+/// other two are kept for themes that want them.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum StatusLook {
     /// A cell filled with the status colour.
@@ -716,76 +718,6 @@ fn duos() -> impl Iterator<Item = Theme> {
     DUOS.iter().map(|look| look.scheme().theme_with(look.name, look.hues()))
 }
 
-/// Ways of using one set of colours, to be compared side by side. Each
-/// is applied to a light and a dark theme, changing only where colour
-/// goes, never which colours there are.
-const TRIALS: &[(&str, fn(&Look, &mut Hues))] = &[
-    // As the families are: solid bars, filled status cells, coloured
-    // bold callsigns and frequencies, three grounds.
-    ("A Solid bars", |_, _| {}),
-    // Colour only in the data; bars and tabs are a quiet tone of the pane.
-    ("B Quiet bars", |look, h| quiet_bars(look, h)),
-    // Hardly any colour: plain bold callsigns, status as coloured text,
-    // shaded alternate rows.
-    ("C Plain", |look, h| {
-        quiet_bars(look, h);
-        plain_data(look, h);
-        h.status = StatusLook::Text;
-        h.zebra = true;
-    }),
-    // Status colours the whole row; everything else is plain.
-    ("D Status rows", |look, h| {
-        quiet_bars(look, h);
-        plain_data(look, h);
-        h.status = StatusLook::Row;
-    }),
-    // A colour for every column, on striped rows.
-    ("E Columns", |look, h| {
-        let field = rgb(look.field);
-        h.band = legible(rgb(look.magenta), field, 4.5);
-        h.mode = legible(rgb(look.green), field, 4.5);
-        h.zebra = true;
-    }),
-    // One ground, no panes: colour in text only, like a terminal.
-    ("F Flat", |look, h| {
-        quiet_bars(look, h);
-        h.chrome = rgb(look.field);
-        h.pane = rgb(look.field);
-        h.bar = rgb(look.surface);
-        h.status = StatusLook::Text;
-    }),
-    // The window frame carries the colour; panes and bars stay neutral.
-    ("G Coloured frame", |look, h| {
-        let frame = rgb(look.bar);
-        quiet_bars(look, h);
-        h.chrome = if dark(frame) { frame } else { mix(frame, Color::BLACK, 0.5) };
-    }),
-];
-
-fn quiet_bars(look: &Look, h: &mut Hues) {
-    h.bar = mix(rgb(look.pane), rgb(look.text), 0.14);
-    h.bar_text = rgb(look.text);
-}
-
-fn plain_data(look: &Look, h: &mut Hues) {
-    h.call = rgb(look.text);
-    h.freq = rgb(look.text);
-}
-
-fn trials() -> impl Iterator<Item = Theme> {
-    ["Light Standard", "Dark Standard"]
-        .into_iter()
-        .filter_map(|base| LOOKS.iter().find(|look| look.name == base))
-        .flat_map(|look| {
-            let side = look.name.split(' ').next().unwrap_or_default();
-            TRIALS.iter().map(move |(name, apply)| {
-                let mut hues = look.hues();
-                apply(look, &mut hues);
-                look.scheme().theme_with(format!("{side} {name}"), hues)
-            })
-        })
-}
-
 /// Schemes collected from elsewhere, in alphabetical order: the themes
 /// distributed with Omarchy and a selection from the Tinted Theming
 /// Base16 collection (both MIT licensed), less the ones iced already
@@ -929,8 +861,6 @@ pub(super) enum ThemeSource {
     /// A palette from the Omarchy community theme list, shipped with
     /// slogger.
     Community,
-    /// One colour set used several ways, for comparing them.
-    Trial,
     /// Built on a primary and a secondary colour.
     Duo,
     /// One of iced's built-in themes.
@@ -939,9 +869,8 @@ pub(super) enum ThemeSource {
 
 impl ThemeSource {
     /// Picker sections, in the order they are shown.
-    pub(super) const ALL: [ThemeSource; 7] = [
+    pub(super) const ALL: [ThemeSource; 6] = [
         ThemeSource::Duo,
-        ThemeSource::Trial,
         ThemeSource::Slogger,
         ThemeSource::Custom,
         ThemeSource::Bundled,
@@ -952,12 +881,11 @@ impl ThemeSource {
     /// Section heading in the picker.
     pub(super) fn title(self) -> &'static str {
         match self {
-            ThemeSource::Duo => "NEW: ONE COLOUR FOR STRUCTURE, ONE FOR THE SELECTION",
+            ThemeSource::Duo => "ONE COLOUR FOR STRUCTURE, ONE FOR THE SELECTION",
             ThemeSource::Slogger => "SLOGGER",
             ThemeSource::Custom => "YOUR THEMES",
             ThemeSource::Bundled => "COLLECTION",
             ThemeSource::Community => "OMARCHY COMMUNITY",
-            ThemeSource::Trial => "TRIALS: THE SAME COLOURS USED DIFFERENT WAYS",
             ThemeSource::BuiltIn => "CLASSICS",
         }
     }
@@ -986,7 +914,6 @@ fn themes_from(custom: Option<&Path>) -> Vec<ThemeEntry> {
     let mut entries: Vec<ThemeEntry> = designed()
         .chain(std::iter::once(app_theme()))
         .map(entry(ThemeSource::Slogger))
-        .chain(trials().map(entry(ThemeSource::Trial)))
         .chain(duos().map(entry(ThemeSource::Duo)))
         .collect();
     let bundled: Vec<ThemeEntry> = schemes(BUNDLED)
@@ -1820,7 +1747,6 @@ palette:
             entries.len(),
             1 + LOOKS.len()
                 + DUOS.len()
-                + 2 * TRIALS.len()
                 + BUNDLED.len()
                 + community::COMMUNITY.len()
                 + Theme::ALL.len()
