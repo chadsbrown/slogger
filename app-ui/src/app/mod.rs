@@ -9,6 +9,8 @@ mod lotw_upload;
 mod message;
 mod modals;
 mod panels;
+#[cfg(test)]
+mod preview;
 mod services;
 mod spots;
 mod state;
