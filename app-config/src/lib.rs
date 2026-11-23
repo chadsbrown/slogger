@@ -208,6 +208,8 @@ pub struct RigConfig {
     /// rig's own broadcasts and do not poll — auto-information on
     /// Yaesu/Kenwood/Elecraft (enabled for you at connect), CI-V
     /// Transceive on Icom (you must also turn it on in the rig's menu).
+    /// Polling can make a rig miss front-panel button presses; `true`
+    /// avoids that.
     pub transceive: bool,
 }
 

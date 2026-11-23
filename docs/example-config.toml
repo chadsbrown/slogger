@@ -38,13 +38,20 @@
 # serial_port = "/dev/ttyUSB0"  # required for icom/yaesu/kenwood/elecraft
 # baud_rate = 115200             # optional; vendor default if unset
 # label = "Main"                 # optional; defaults to model name
-# transceive = false             # how slogger follows the VFO knob:
-#                                #   false (default) — poll the rig at 4 Hz
-#                                #   true — no polling; listen for the rig's
-#                                #     own broadcasts. Yaesu/Kenwood/Elecraft:
-#                                #     switched on for you at connect. Icom:
-#                                #     also enable CI-V Transceive in the
-#                                #     rig's menu or nothing will update.
+# transceive = true             # optional; default false. How slogger
+#                                # follows the VFO knob:
+#   false — slogger polls the rig for frequency and mode at 4 Hz.
+#     Works with no rig setup, but the constant traffic can make the
+#     rig miss front-panel button presses (seen on an IC-7610: the
+#     FILTER button did not always change the filter).
+#   true — no polling; slogger only listens for the rig's own
+#     broadcasts. Recommended if front-panel buttons misbehave while
+#     slogger is running.
+#       Yaesu/Kenwood/Elecraft: switched on for you at connect.
+#       Icom: you must also enable CI-V Transceive in the rig's menu
+#         (IC-7610: Menu > Set > Connectors > CI-V > CI-V Transceive),
+#         or nothing will update.
+#       Flex: ignored.
 
 # Second rig for SO2R (uncomment + fill):
 # [[rig]]

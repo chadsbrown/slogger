@@ -158,7 +158,7 @@ label = "Main"
 | `baud_rate` | no | vendor default | Vendor's default baud is used if unset. |
 | `host` | for flex | none | Hostname/IP of the FlexRadio. Required when `vendor = "flex"`; ignored otherwise. |
 | `label` | no | model | Friendly name (e.g. "Main", "Aux"). Helpful for SO2R. |
-| `transceive` | no | `false` | How slogger follows the VFO knob. `false`: poll the rig at 4 Hz. `true`: no polling; listen for the rig's own broadcasts (auto-information on Yaesu/Kenwood/Elecraft, switched on at connect; CI-V Transceive on Icom, which must also be enabled in the rig's menu). |
+| `transceive` | no | `false` | How slogger follows the VFO knob. `false`: poll the rig at 4 Hz. `true`: no polling; listen for the rig's own broadcasts (auto-information on Yaesu/Kenwood/Elecraft, switched on at connect; CI-V Transceive on Icom, which must also be enabled in the rig's menu). Polling can make a rig miss front-panel button presses (seen on an IC-7610's FILTER button); set `true` if that happens. |
 
 **Multi-rig**: write multiple `[[rig]]` blocks. The first is `active_rig = 0`
 at boot; UI can switch via `Message::ActiveRigChanged`.
