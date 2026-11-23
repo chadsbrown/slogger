@@ -121,6 +121,8 @@ impl Scheme {
             hover: self.surface,
             control: self.surface,
             edge: 1.0,
+            status: StatusLook::Cell,
+            zebra: false,
             bar: self.accent,
             bar_text: ink_on(self.accent),
             pane: self.surface,
@@ -199,6 +201,10 @@ pub(super) struct Hues {
     pub(super) control: Color,
     /// Border width around panes, tables and buttons.
     pub(super) edge: f32,
+    /// How a status (a needed spot, a band rating) is shown.
+    pub(super) status: StatusLook,
+    /// Whether every other table row is shaded.
+    pub(super) zebra: bool,
     /// A title bar or the active tab, and the text on it.
     pub(super) bar: Color,
     pub(super) bar_text: Color,
@@ -214,6 +220,17 @@ pub(super) struct Hues {
     pub(super) good: Color,
     pub(super) warn: Color,
     pub(super) bad: Color,
+}
+
+/// How a theme shows a status.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum StatusLook {
+    /// A cell filled with the status colour.
+    Cell,
+    /// Bold text in the status colour.
+    Text,
+    /// The whole table row tinted with the status colour.
+    Row,
 }
 
 /// The hues of every scheme-built theme, by theme name. An iced `Theme`
@@ -537,6 +554,8 @@ impl Look {
             hover: rgb(self.surface),
             control: rgb(self.button),
             edge: self.edge,
+            status: StatusLook::Cell,
+            zebra: false,
             bar: rgb(self.bar),
             bar_text: rgb(self.bar_text),
             chrome: rgb(self.chrome),
@@ -552,6 +571,76 @@ impl Look {
 
 fn designed() -> impl Iterator<Item = Theme> {
     LOOKS.iter().map(|look| look.scheme().theme_with(look.name, look.hues()))
+}
+
+/// Ways of using one set of colours, to be compared side by side. Each
+/// is applied to a light and a dark theme, changing only where colour
+/// goes, never which colours there are.
+const TRIALS: &[(&str, fn(&Look, &mut Hues))] = &[
+    // As the families are: solid bars, filled status cells, coloured
+    // bold callsigns and frequencies, three grounds.
+    ("A Solid bars", |_, _| {}),
+    // Colour only in the data; bars and tabs are a quiet tone of the pane.
+    ("B Quiet bars", |look, h| quiet_bars(look, h)),
+    // Hardly any colour: plain bold callsigns, status as coloured text,
+    // shaded alternate rows.
+    ("C Plain", |look, h| {
+        quiet_bars(look, h);
+        plain_data(look, h);
+        h.status = StatusLook::Text;
+        h.zebra = true;
+    }),
+    // Status colours the whole row; everything else is plain.
+    ("D Status rows", |look, h| {
+        quiet_bars(look, h);
+        plain_data(look, h);
+        h.status = StatusLook::Row;
+    }),
+    // A colour for every column, on striped rows.
+    ("E Columns", |look, h| {
+        let field = rgb(look.field);
+        h.band = legible(rgb(look.magenta), field, 4.5);
+        h.mode = legible(rgb(look.green), field, 4.5);
+        h.zebra = true;
+    }),
+    // One ground, no panes: colour in text only, like a terminal.
+    ("F Flat", |look, h| {
+        quiet_bars(look, h);
+        h.chrome = rgb(look.field);
+        h.pane = rgb(look.field);
+        h.bar = rgb(look.surface);
+        h.status = StatusLook::Text;
+    }),
+    // The window frame carries the colour; panes and bars stay neutral.
+    ("G Coloured frame", |look, h| {
+        let frame = rgb(look.bar);
+        quiet_bars(look, h);
+        h.chrome = if dark(frame) { frame } else { mix(frame, Color::BLACK, 0.5) };
+    }),
+];
+
+fn quiet_bars(look: &Look, h: &mut Hues) {
+    h.bar = mix(rgb(look.pane), rgb(look.text), 0.14);
+    h.bar_text = rgb(look.text);
+}
+
+fn plain_data(look: &Look, h: &mut Hues) {
+    h.call = rgb(look.text);
+    h.freq = rgb(look.text);
+}
+
+fn trials() -> impl Iterator<Item = Theme> {
+    ["Light Standard", "Dark Standard"]
+        .into_iter()
+        .filter_map(|base| LOOKS.iter().find(|look| look.name == base))
+        .flat_map(|look| {
+            let side = look.name.split(' ').next().unwrap_or_default();
+            TRIALS.iter().map(move |(name, apply)| {
+                let mut hues = look.hues();
+                apply(look, &mut hues);
+                look.scheme().theme_with(format!("{side} {name}"), hues)
+            })
+        })
 }
 
 /// Schemes collected from elsewhere, in alphabetical order: the themes
@@ -697,13 +786,16 @@ pub(super) enum ThemeSource {
     /// A palette from the Omarchy community theme list, shipped with
     /// slogger.
     Community,
+    /// One colour set used several ways, for comparing them.
+    Trial,
     /// One of iced's built-in themes.
     BuiltIn,
 }
 
 impl ThemeSource {
     /// Picker sections, in the order they are shown.
-    pub(super) const ALL: [ThemeSource; 5] = [
+    pub(super) const ALL: [ThemeSource; 6] = [
+        ThemeSource::Trial,
         ThemeSource::Slogger,
         ThemeSource::Custom,
         ThemeSource::Bundled,
@@ -718,6 +810,7 @@ impl ThemeSource {
             ThemeSource::Custom => "YOUR THEMES",
             ThemeSource::Bundled => "COLLECTION",
             ThemeSource::Community => "OMARCHY COMMUNITY",
+            ThemeSource::Trial => "TRIALS: THE SAME COLOURS USED DIFFERENT WAYS",
             ThemeSource::BuiltIn => "CLASSICS",
         }
     }
@@ -746,6 +839,7 @@ fn themes_from(custom: Option<&Path>) -> Vec<ThemeEntry> {
     let mut entries: Vec<ThemeEntry> = designed()
         .chain(std::iter::once(app_theme()))
         .map(entry(ThemeSource::Slogger))
+        .chain(trials().map(entry(ThemeSource::Trial)))
         .collect();
     let bundled: Vec<ThemeEntry> = schemes(BUNDLED)
         .map(entry(ThemeSource::Bundled))
@@ -1054,6 +1148,20 @@ pub(super) fn table_row<'a>(
     on_press: Message,
     highlighted: bool,
 ) -> Element<'a, Message> {
+    table_row_at(theme, cells, on_press, highlighted, 0, None)
+}
+
+/// [`table_row`] for row number `index` (alternate rows are shaded in
+/// themes that stripe their tables), with the status the row stands for
+/// (themes that colour whole rows by status use it).
+pub(super) fn table_row_at<'a>(
+    theme: &Theme,
+    cells: Row<'a, Message>,
+    on_press: Message,
+    highlighted: bool,
+    index: usize,
+    tone: Option<Tone>,
+) -> Element<'a, Message> {
     let cells = cells.spacing(CELL_SPACING);
     let cells: Element<'a, Message> = match selected_row_theme(theme) {
         // Unstyled text takes its colour from above the row, so the twin
@@ -1068,15 +1176,18 @@ pub(super) fn table_row<'a>(
         .width(Length::Fill)
         .on_press(on_press)
         .style(move |theme: &Theme, status| {
+            let hues = hues(theme);
+            let ground = theme.palette().background;
             let background = if highlighted {
-                Some(hues(theme).select.into())
+                Some(hues.select.into())
+            } else if matches!(status, button::Status::Hovered | button::Status::Pressed) {
+                Some(hues.hover.into())
+            } else if let (StatusLook::Row, Some(tone)) = (hues.status, tone) {
+                Some(mix(ground, tone.fill(theme), 0.3).into())
+            } else if hues.zebra && index % 2 == 1 {
+                Some(mix(ground, theme.palette().text, 0.06).into())
             } else {
-                match status {
-                    button::Status::Hovered | button::Status::Pressed => {
-                        Some(hues(theme).hover.into())
-                    }
-                    _ => None,
-                }
+                None
             };
             button::Style {
                 background,
@@ -1245,10 +1356,25 @@ pub(super) fn filled_cell<'a>(
     .clip(true)
     .style(move |theme: &Theme| {
         let fill = tone.fill(theme);
-        container::Style {
-            background: Some(fill.into()),
-            text_color: Some(ink_on(fill)),
-            ..container::Style::default()
+        match hues(theme).status {
+            StatusLook::Cell => container::Style {
+                background: Some(fill.into()),
+                text_color: Some(ink_on(fill)),
+                ..container::Style::default()
+            },
+            // Coloured text, made readable on the table's ground.
+            StatusLook::Text => container::Style {
+                text_color: Some(legible(fill, theme.palette().background, 4.5)),
+                ..container::Style::default()
+            },
+            // Where a whole row carries the colour the caller draws a
+            // plain cell instead, so anything arriving here is a status
+            // outside a row (a band rating) and is filled as usual.
+            StatusLook::Row => container::Style {
+                background: Some(fill.into()),
+                text_color: Some(ink_on(fill)),
+                ..container::Style::default()
+            },
         }
     })
     .into()
@@ -1544,7 +1670,11 @@ palette:
         let entries = themes_from(None);
         assert_eq!(
             entries.len(),
-            1 + LOOKS.len() + BUNDLED.len() + community::COMMUNITY.len() + Theme::ALL.len()
+            1 + LOOKS.len()
+                + 2 * TRIALS.len()
+                + BUNDLED.len()
+                + community::COMMUNITY.len()
+                + Theme::ALL.len()
         );
     }
 

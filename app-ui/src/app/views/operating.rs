@@ -30,7 +30,7 @@ use crate::app::spots::{SpotColumn, SpotStatus, describe_spot, sort_spots, statu
 use crate::app::state::App;
 use crate::app::theme::{
     self, LABEL_TEXT, MONO, ROW_TEXT, Tone, badge, cell, cell_fill, cell_right, filled_cell,
-    label, muted, table_header, table_line, table_row,
+    label, muted, table_header, table_line,
 };
 
 pub(in crate::app) fn view(app: &App) -> Element<'_, Message> {
@@ -481,9 +481,10 @@ impl App {
         ]);
 
         let mut rows = column![].spacing(0);
-        for (spot, info) in recent
+        for (index, (spot, info)) in recent
             .into_iter()
             .filter(|(_, info)| !self.spots_needed_only || info.status == SpotStatus::NeededBand)
+            .enumerate()
         {
             let needed = info.status == SpotStatus::NeededBand;
             let worked = info.status == SpotStatus::Worked;
@@ -493,7 +494,10 @@ impl App {
                 move |theme: &Theme| if worked { muted(theme) } else { live(theme) }
             };
             let tone = tint(|_| text::Style::default());
-            let status: Element<'_, Message> = if needed {
+            let row_carries_status = theme::hues(&self.theme).status == theme::StatusLook::Row;
+            let status: Element<'_, Message> = if needed && row_carries_status {
+                cell(status_label(info.status), W_STATUS).font(theme::MONO_BOLD).into()
+            } else if needed {
                 filled_cell(status_label(info.status), W_STATUS, Tone::Good)
             } else {
                 cell(status_label(info.status), W_STATUS).style(muted).into()
@@ -513,11 +517,13 @@ impl App {
                 cell_fill(spot.comment.as_deref().unwrap_or("")),
             ];
             let is_target = target_dxcc_id.is_some() && info.dxcc_id == target_dxcc_id;
-            rows = rows.push(table_row(
+            rows = rows.push(theme::table_row_at(
                 &self.theme,
                 cells,
                 Message::SpotClicked(spot.clone()),
                 is_target,
+                index,
+                needed.then_some(Tone::Good),
             ));
         }
 
@@ -550,7 +556,7 @@ impl App {
             cell_fill("CQ"),
         ]);
         let mut rows = column![].spacing(0);
-        for q in &self.recent {
+        for (index, q) in self.recent.iter().enumerate() {
             let cells = row![
                 cell(q.qso_begin.format("%Y-%m-%d").to_string(), W_DATE).style(muted),
                 cell(q.qso_begin.format("%H:%M").to_string(), W_TIME),
@@ -568,11 +574,13 @@ impl App {
                 cell(q.continent.as_deref().unwrap_or(""), W_CONT),
                 cell_fill(q.cq_zone.map(|z| z.to_string()).unwrap_or_default()),
             ];
-            rows = rows.push(table_row(
+            rows = rows.push(theme::table_row_at(
                 &self.theme,
                 cells,
                 Message::QsoSelected(q.id),
                 self.editing_qso == Some(q.id),
+                index,
+                None,
             ));
         }
         theme::grid(
