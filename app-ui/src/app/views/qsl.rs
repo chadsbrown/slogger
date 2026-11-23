@@ -21,7 +21,7 @@ use station_resolver::Resolver;
 use crate::app::helpers::service_name;
 use crate::app::message::Message;
 use crate::app::state::App;
-use crate::app::theme::{cell, cell_fill, label, muted, table_header, table_row};
+use crate::app::theme::{self, cell, cell_fill, label, muted, table_header, table_row};
 use radio_core::{Qso, QsoId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -266,7 +266,7 @@ fn view_services_pane(app: &App) -> Element<'_, Message> {
     // Update reads only what changed at LoTW since the last sync; this
     // reads everything again.
     let resync_btn = button(text("Full LoTW resync"))
-        .style(button::secondary)
+        .style(theme::push_button)
         .on_press_maybe((!app.syncing).then_some(Message::LotwFullResyncPressed));
 
     let mut out = column![col, row![update_btn, resync_btn].spacing(8)].spacing(8);
@@ -435,7 +435,7 @@ fn view_pending_pane(app: &App) -> Element<'_, Message> {
         let mark_btn = match state.service_filter.0 {
             Some(s) => button(text(mark_label))
                 .on_press(Message::QslBulkMarkUploaded(s.key().into())),
-            None => button(text(mark_label)).style(button::secondary),
+            None => button(text(mark_label)).style(theme::push_button),
         };
         row![
             text(format!("{} selected:", state.selected.len())),
@@ -502,7 +502,7 @@ fn view_pending_pane(app: &App) -> Element<'_, Message> {
         filter_row,
         bulk_actions,
         action_status,
-        scrollable(list).height(Length::Fill),
+        theme::grid(scrollable(list).height(Length::Fill)),
     ]
     .spacing(8)
     .into()
@@ -552,22 +552,32 @@ fn view_confirmations_pane(app: &App) -> Element<'_, Message> {
                 W_CONFIRMED
             ),
             cell(service_name(&c.service), W_SERVICE),
-            cell(c.call.as_str(), W_CALL),
+            cell(c.call.as_str(), W_CALL)
+                .font(theme::MONO_BOLD)
+                .style(theme::call),
             cell(c.qso_begin.format("%Y-%m-%d %H:%M").to_string(), W_QSO_TIME).style(muted),
-            cell(c.band.map(|b| b.as_adif()).unwrap_or(""), W_BAND),
+            cell(c.band.map(|b| b.as_adif()).unwrap_or(""), W_BAND).style(theme::band),
             cell(
                 c.mode.as_ref().map(|m| m.as_adif().to_string()).unwrap_or_default(),
                 W_MODE
-            ),
+            )
+            .style(theme::mode),
             cell_fill(r.entity.as_str()),
         ];
-        list = list.push(table_row(cells, Message::ConfirmationClicked(c.qso_id), false));
+        list = list.push(table_row(
+            &app.theme,
+            cells,
+            Message::ConfirmationClicked(c.qso_id),
+            false,
+        ));
     }
 
     out.push(label(confirmations_heading(rows.len(), RECENT_CONFIRMATIONS_LIMIT)))
-        .push(header)
-        .push(rule::horizontal(1))
-        .push(scrollable(list).height(Length::Fill))
+        .push(theme::grid(column![
+            header,
+            rule::horizontal(1),
+            scrollable(list).height(Length::Fill)
+        ]))
         .into()
 }
 

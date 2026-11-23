@@ -66,14 +66,15 @@ pub(super) fn tab_bar(current: ViewKind) -> Element<'static, Message> {
             button(
                 row![
                     text(v.label()).size(14),
-                    theme::label(format!("^{}", v.shortcut_digit())),
+                    // Plain text, so it takes the tab's own colour.
+                    text(format!("^{}", v.shortcut_digit())).size(theme::LABEL_TEXT),
                 ]
                 .spacing(6)
                 .align_y(iced::Alignment::Center),
             )
             .padding([4, 12])
             .on_press(Message::ViewChanged(*v))
-            .style(theme::tab_style(*v == current)),
+            .style(theme::frame_tab_style(*v == current)),
         );
     }
     container(bar).padding([0, 4]).width(Length::Fill).into()

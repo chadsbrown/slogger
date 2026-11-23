@@ -220,7 +220,7 @@ impl App {
             band_filter_row,
             totals_line,
             target_line,
-            scrollable(list).height(Length::Fill),
+            crate::app::theme::grid(scrollable(list).height(Length::Fill)),
         ]
         .spacing(8)
         .into()

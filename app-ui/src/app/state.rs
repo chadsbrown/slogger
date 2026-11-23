@@ -72,6 +72,13 @@ pub struct App {
     pub(super) qso_detail: Option<logbook_domain::QsoDetail>,
     /// The active colour theme, chosen in the bottom bar.
     pub(super) theme: iced::Theme,
+    /// Every theme the picker offers, re-read from the theme directories
+    /// each time the picker opens.
+    pub(super) themes: Vec<super::theme::ThemeEntry>,
+    /// The theme editor, while it is open beside the UI.
+    pub(super) theme_editor: Option<super::editor::ThemeEditor>,
+    /// Set by a first press of the picker's Delete, so a second confirms.
+    pub(super) theme_delete_armed: bool,
     /// Whole-UI scale factor (the A− / A+ buttons). 1.0 is normal size.
     pub(super) font_scale: f32,
     /// The modal dialog currently open over the UI, if any.
@@ -177,6 +184,8 @@ pub struct App {
 
 impl App {
     pub fn init() -> (Self, Task<Message>) {
+        // A theme file that cannot be used is said so in the status bar.
+        let (themes, theme_problems) = super::theme::load_themes();
         let app = Self {
             service: None,
             repo: None,
@@ -195,7 +204,10 @@ impl App {
             syncing: false,
             editing_qso: None,
             qso_detail: None,
-            theme: super::theme::app_theme(),
+            theme: super::theme::default_theme(),
+            themes,
+            theme_editor: None,
+            theme_delete_armed: false,
             font_scale: 1.0,
             modal: None,
             entry_draft: None,
@@ -230,7 +242,7 @@ impl App {
             condx_active: false,
             condx: None,
             worked_by_band: Default::default(),
-            status: None,
+            status: theme_problems.into_iter().next(),
             panels: Panels::default(),
             dupe_check_gen: 0,
             dupe_match: None,

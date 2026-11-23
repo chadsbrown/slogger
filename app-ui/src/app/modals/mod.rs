@@ -66,7 +66,7 @@ pub(super) fn overlay<'a>(
 
 fn view<'a>(app: &'a App, modal: &'a Modal) -> Element<'a, Message> {
     match modal {
-        Modal::ThemePicker => theme::view(&app.theme),
+        Modal::ThemePicker => theme::view(&app.theme, &app.themes, app.theme_delete_armed),
         Modal::StationEditor(editor) => station::view(editor),
     }
 }
@@ -115,7 +115,7 @@ pub(super) fn frame<'a>(
         .style(|theme: &Theme| {
             let ext = theme.extended_palette();
             container::Style {
-                background: Some(ext.background.base.color.into()),
+                background: Some(super::theme::hues(theme).pane.into()),
                 text_color: Some(theme.palette().text),
                 border: Border {
                     color: ext.background.strong.color,

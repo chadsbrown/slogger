@@ -86,6 +86,13 @@ pub enum Message {
     FontScaleDown,
     FontScaleReset,
     ThemeSelected(iced::Theme),
+    /// Open the theme editor on the theme in use: on a new copy of it,
+    /// or (for a theme of the user's own, when `copy` is false) on the
+    /// theme itself.
+    EditTheme { copy: bool },
+    /// Delete the file of the theme in use. The first press only arms it.
+    DeleteTheme,
+    ThemeEditor(super::editor::EditorMessage),
     OpenModal(super::modals::Modal),
     CloseModal,
     /// A click inside an open modal that hit no control. Does nothing; it

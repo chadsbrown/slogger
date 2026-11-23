@@ -1,32 +1,47 @@
 //! Theme picker: a grid of tiles, each drawn in its own theme's colours
-//! so it previews what choosing it would look like. Picking a tile
+//! (with a sample table row) so it previews what choosing it would look
+//! like. Picking a tile
 //! applies the theme immediately and leaves the modal open, so several
-//! can be tried in a row.
+//! can be tried in a row. Tiles are grouped by where the theme comes from.
 
 use iced::widget::{Space, button, column, container, row, scrollable, text};
 use iced::{Border, Color, Element, Length, Theme};
 
 use super::super::message::Message;
-use super::super::theme as style;
+use super::super::theme::{self as style, ThemeEntry, ThemeSource};
 
 const PER_ROW: usize = 3;
 const GAP: f32 = 10.0;
 
-pub(super) fn view(current: &Theme) -> Element<'_, Message> {
+pub(super) fn view<'a>(
+    current: &'a Theme,
+    themes: &'a [ThemeEntry],
+    delete_armed: bool,
+) -> Element<'a, Message> {
     let current_name = current.to_string();
 
     let mut rows = column![].spacing(GAP).width(Length::Fill);
-    let themes = style::all_themes();
-    for chunk in themes.chunks(PER_ROW) {
-        let mut tiles = row![].spacing(GAP);
-        for theme in chunk {
-            tiles = tiles.push(tile(theme, theme.to_string() == current_name));
+    for source in ThemeSource::ALL {
+        let group: Vec<&Theme> = themes
+            .iter()
+            .filter(|entry| entry.source == source)
+            .map(|entry| &entry.theme)
+            .collect();
+        if group.is_empty() {
+            continue;
         }
-        // Pad a short final row so its tiles keep the same width.
-        for _ in chunk.len()..PER_ROW {
-            tiles = tiles.push(Space::new().width(Length::Fill));
+        rows = rows.push(style::label(source.title()));
+        for chunk in group.chunks(PER_ROW) {
+            let mut tiles = row![].spacing(GAP);
+            for theme in chunk {
+                tiles = tiles.push(tile(theme, theme.to_string() == current_name));
+            }
+            // Pad a short final row so its tiles keep the same width.
+            for _ in chunk.len()..PER_ROW {
+                tiles = tiles.push(Space::new().width(Length::Fill));
+            }
+            rows = rows.push(tiles);
         }
-        rows = rows.push(tiles);
     }
 
     let body = scrollable(container(rows).padding(iced::Padding {
@@ -36,9 +51,26 @@ pub(super) fn view(current: &Theme) -> Element<'_, Message> {
     .width(Length::Fill)
     .height(Length::Fill);
 
+    // Only a theme file of the user's own can be changed or deleted;
+    // any theme can be copied and the copy edited.
+    let own = themes
+        .iter()
+        .any(|entry| entry.file.is_some() && entry.theme.to_string() == current_name);
+    let action = |caption: &'static str, message: Option<Message>| {
+        button(text(caption).size(13))
+            .padding([3, 10])
+            .on_press_maybe(message)
+            .style(style::push_button)
+    };
     let footer = row![
         style::label("CURRENT"),
-        text(current_name).size(style::ROW_TEXT),
+        text(current_name).size(style::ROW_TEXT).width(Length::Fill),
+        action(
+            if delete_armed { "Really delete?" } else { "Delete" },
+            own.then_some(Message::DeleteTheme),
+        ),
+        action("Edit", own.then_some(Message::EditTheme { copy: false })),
+        action("Edit a copy", Some(Message::EditTheme { copy: true })),
     ]
     .spacing(8)
     .align_y(iced::Alignment::Center);
@@ -49,8 +81,8 @@ pub(super) fn view(current: &Theme) -> Element<'_, Message> {
 fn tile(theme: &Theme, is_current: bool) -> Element<'static, Message> {
     let palette = theme.extended_palette();
     let background = palette.background.base.color;
-    let name_color = palette.background.base.text;
-    let muted = Color { a: 0.5, ..name_color };
+    let hues = style::hues(theme);
+    let (bar, name_color, pane) = (hues.bar, hues.bar_text, hues.pane);
 
     let name_row = row![
         text(theme.to_string())
@@ -59,34 +91,70 @@ fn tile(theme: &Theme, is_current: bool) -> Element<'static, Message> {
             .width(Length::Fill),
         text(if is_current { "✓" } else { "" })
             .size(style::ROW_TEXT)
-            .color(palette.primary.base.color),
+            .color(name_color),
     ]
     .align_y(iced::Alignment::Center);
-
-    let swatches = row![
-        swatch(palette.primary.base.color),
-        swatch(palette.success.base.color),
-        swatch(palette.warning.base.color),
-        swatch(palette.danger.base.color),
-        Space::new().width(Length::Fill),
-        // A stand-in for a line of muted text.
-        container(Space::new().width(28).height(4)).style(move |_: &Theme| container::Style {
-            background: Some(muted.into()),
+    // The name sits on the theme's title bar.
+    let title = container(name_row)
+        .padding([5, 14])
+        .width(Length::Fill)
+        .style(move |_: &Theme| container::Style {
+            background: Some(bar.into()),
             border: Border {
-                radius: 2.0.into(),
+                radius: iced::border::top(5.0),
                 ..Border::default()
             },
             ..container::Style::default()
-        }),
+        });
+
+    // A table row as this theme would draw it.
+    let sample = |s: &'static str, color: Color| {
+        text(s)
+            .size(style::LABEL_TEXT)
+            .font(style::MONO)
+            .color(color)
+            .wrapping(text::Wrapping::None)
+    };
+    let sample_row = row![
+        sample("18:42", hues.muted),
+        sample("W1AW", hues.call),
+        sample("14074.0", hues.freq),
+        sample("20M", hues.band),
+        sample("FT8", hues.mode),
+    ]
+    .spacing(7);
+    // The row sits on the theme's data ground, set into the pane.
+    let line = palette.background.strong.color;
+    let sample_row = container(sample_row)
+        .padding([3, 6])
+        .width(Length::Fill)
+        .style(move |_: &Theme| container::Style {
+            background: Some(background.into()),
+            border: Border {
+                color: line,
+                width: 1.0,
+                radius: 2.0.into(),
+            },
+            ..container::Style::default()
+        });
+
+    let swatches = row![
+        // Status fills, then the row highlight and the window frame.
+        swatch(hues.good),
+        swatch(hues.warn),
+        swatch(hues.bad),
+        Space::new().width(Length::Fill),
+        swatch(hues.select),
+        swatch(hues.chrome),
     ]
     .spacing(6)
     .align_y(iced::Alignment::Center);
 
-    let inner = container(column![name_row, swatches].spacing(10))
-        .padding([12, 14])
+    let body = container(column![sample_row, swatches].spacing(8)).padding([9, 14]);
+    let inner = container(column![title, body])
         .width(Length::Fill)
         .style(move |_: &Theme| container::Style {
-            background: Some(background.into()),
+            background: Some(pane.into()),
             border: Border {
                 radius: 5.0.into(),
                 ..Border::default()

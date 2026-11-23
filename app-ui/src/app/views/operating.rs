@@ -29,8 +29,8 @@ use crate::app::panels::{DragMode, PanelKind};
 use crate::app::spots::{SpotColumn, SpotStatus, describe_spot, sort_spots, status_label};
 use crate::app::state::App;
 use crate::app::theme::{
-    self, LABEL_TEXT, MONO, ROW_TEXT, badge, cell, cell_fill, cell_right, label, muted,
-    table_header, table_line, table_row,
+    self, LABEL_TEXT, MONO, ROW_TEXT, Tone, badge, cell, cell_fill, cell_right, filled_cell,
+    label, muted, table_header, table_line,
 };
 
 pub(in crate::app) fn view(app: &App) -> Element<'_, Message> {
@@ -49,7 +49,8 @@ impl App {
     /// One toggle per panel (lit when open) plus "Reset layout". This is
     /// where a closed panel is brought back.
     fn panel_bar(&self) -> Element<'_, Message> {
-        let mut bar = row![label("PANELS")]
+        // Plain text: this bar sits on the window frame, not on a pane.
+        let mut bar = row![text("PANELS").size(LABEL_TEXT)]
             .spacing(4)
             .align_y(iced::Alignment::Center);
         for kind in PanelKind::ALL {
@@ -57,14 +58,14 @@ impl App {
                 button(text(kind.title()).size(12))
                     .padding([2, 10])
                     .on_press(Message::PanelToggled(*kind))
-                    .style(theme::tab_style(self.panels.is_open(*kind))),
+                    .style(theme::frame_toggle_style(self.panels.is_open(*kind))),
             );
         }
         bar = bar.push(Space::new().width(Length::Fill)).push(
             button(text("Reset layout").size(12))
                 .padding([2, 10])
                 .on_press(Message::PanelsReset)
-                .style(button::text),
+                .style(theme::frame_toggle_style(false)),
         );
         container(bar.wrap()).padding([0, 4]).width(Length::Fill).into()
     }
@@ -111,7 +112,7 @@ impl App {
                     button(text("×").size(14))
                         .padding([0, 6])
                         .on_press(Message::PanelToggled(kind))
-                        .style(button::text),
+                        .style(theme::bar_button),
                 ]
                 .align_y(iced::Alignment::Center),
             )
@@ -308,11 +309,7 @@ impl App {
                             .style(muted),
                     )
                 } else {
-                    Element::from(
-                        text(format!("NEW entity on {}", band.as_adif()))
-                            .size(12)
-                            .style(text::success),
-                    )
+                    theme::tone_badge(format!("NEW entity on {}", band.as_adif()), Tone::Good)
                 });
             }
         }
@@ -347,7 +344,7 @@ impl App {
                     .style(button::danger),
                 button(text("Cancel"))
                     .on_press(Message::CancelEditPressed)
-                    .style(button::secondary),
+                    .style(theme::push_button),
             ],
         }
         .spacing(8)
@@ -356,14 +353,14 @@ impl App {
             buttons = buttons.push(
                 button(text("← From rig").size(12))
                     .on_press(Message::UseRigPressed)
-                    .style(button::secondary),
+                    .style(theme::push_button),
             );
         }
         if self.active_rig_handle().is_some() {
             buttons = buttons.push(
                 button(text("→ To rig").size(12))
                     .on_press(Message::SendToRigPressed)
-                    .style(button::secondary),
+                    .style(theme::push_button),
             );
         }
         buttons.into()
@@ -428,7 +425,7 @@ impl App {
             .style(if self.spots_needed_only {
                 button::primary
             } else {
-                button::secondary
+                theme::push_button
             }),
         ]
         .spacing(8)
@@ -484,39 +481,58 @@ impl App {
         ]);
 
         let mut rows = column![].spacing(0);
-        for (spot, info) in recent
+        for (index, (spot, info)) in recent
             .into_iter()
             .filter(|(_, info)| !self.spots_needed_only || info.status == SpotStatus::NeededBand)
+            .enumerate()
         {
             let needed = info.status == SpotStatus::NeededBand;
             let worked = info.status == SpotStatus::Worked;
-            // Needed spots pop; already-worked ones recede.
-            let tone = move |theme: &Theme| -> text::Style {
-                if worked { muted(theme) } else { text::Style::default() }
+            // Needed spots pop; already-worked ones recede, losing their
+            // column colours along with their brightness.
+            let tint = move |live: fn(&Theme) -> text::Style| {
+                move |theme: &Theme| if worked { muted(theme) } else { live(theme) }
             };
-            let status = cell(status_label(info.status), W_STATUS).style(move |theme: &Theme| {
-                if needed { text::success(theme) } else { muted(theme) }
-            });
+            let tone = tint(|_| text::Style::default());
+            let row_carries_status = theme::hues(&self.theme).status == theme::StatusLook::Row;
+            let status: Element<'_, Message> = if needed && row_carries_status {
+                cell(status_label(info.status), W_STATUS).font(theme::MONO_BOLD).into()
+            } else if needed {
+                filled_cell(status_label(info.status), W_STATUS, Tone::Good)
+            } else {
+                cell(status_label(info.status), W_STATUS).style(muted).into()
+            };
             let cells = row![
                 status,
                 cell_right(age_label(now.signed_duration_since(spot.spotted_at)), W_AGE)
                     .style(muted),
-                cell(spot.call.as_str(), W_CALL).style(tone),
-                cell_right(khz(spot.freq_hz as i64), W_FREQ).style(tone),
-                cell(info.band.map(|b| b.as_adif()).unwrap_or(""), W_BAND).style(tone),
-                cell(spot.mode.as_deref().unwrap_or(""), W_MODE).style(tone),
+                cell(spot.call.as_str(), W_CALL)
+                    .font(theme::MONO_BOLD)
+                    .style(tint(theme::call)),
+                cell_right(khz(spot.freq_hz as i64), W_FREQ).style(tint(theme::freq)),
+                cell(info.band.map(|b| b.as_adif()).unwrap_or(""), W_BAND)
+                    .style(tint(theme::band)),
+                cell(spot.mode.as_deref().unwrap_or(""), W_MODE).style(tint(theme::mode)),
                 cell(info.country.clone().unwrap_or_default(), W_ENTITY).style(tone),
                 cell_fill(spot.comment.as_deref().unwrap_or("")),
             ];
             let is_target = target_dxcc_id.is_some() && info.dxcc_id == target_dxcc_id;
-            rows = rows.push(table_row(cells, Message::SpotClicked(spot.clone()), is_target));
+            rows = rows.push(theme::table_row_at(
+                &self.theme,
+                cells,
+                Message::SpotClicked(spot.clone()),
+                is_target,
+                index,
+                needed.then_some(Tone::Good),
+            ));
         }
 
         column![
             toolbar,
-            header,
-            rule::horizontal(1),
-            scrollable(rows).height(Length::Fill),
+            theme::grid(
+                column![header, rule::horizontal(1), scrollable(rows).height(Length::Fill)]
+                    .spacing(4)
+            ),
         ]
         .spacing(4)
         .into()
@@ -540,34 +556,36 @@ impl App {
             cell_fill("CQ"),
         ]);
         let mut rows = column![].spacing(0);
-        for q in &self.recent {
+        for (index, q) in self.recent.iter().enumerate() {
             let cells = row![
                 cell(q.qso_begin.format("%Y-%m-%d").to_string(), W_DATE).style(muted),
                 cell(q.qso_begin.format("%H:%M").to_string(), W_TIME),
-                cell(q.call.as_str(), W_CALL),
-                cell_right(q.freq_hz.map(khz).unwrap_or_default(), W_FREQ),
-                cell(q.band.map(|b| b.as_adif()).unwrap_or(""), W_BAND),
+                cell(q.call.as_str(), W_CALL)
+                    .font(theme::MONO_BOLD)
+                    .style(theme::call),
+                cell_right(q.freq_hz.map(khz).unwrap_or_default(), W_FREQ).style(theme::freq),
+                cell(q.band.map(|b| b.as_adif()).unwrap_or(""), W_BAND).style(theme::band),
                 cell(
                     q.mode.as_ref().map(|m| m.as_adif().to_string()).unwrap_or_default(),
                     W_MODE
-                ),
+                )
+                .style(theme::mode),
                 cell(q.dxcc_prefix.as_deref().unwrap_or(""), W_PREFIX),
                 cell(q.continent.as_deref().unwrap_or(""), W_CONT),
                 cell_fill(q.cq_zone.map(|z| z.to_string()).unwrap_or_default()),
             ];
-            rows = rows.push(table_row(
+            rows = rows.push(theme::table_row_at(
+                &self.theme,
                 cells,
                 Message::QsoSelected(q.id),
                 self.editing_qso == Some(q.id),
+                index,
+                None,
             ));
         }
-        column![
-            header,
-            rule::horizontal(1),
-            scrollable(rows).height(Length::Fill),
-        ]
-        .spacing(4)
-        .into()
+        theme::grid(
+            column![header, rule::horizontal(1), scrollable(rows).height(Length::Fill)].spacing(4),
+        )
     }
 
     // ---- Station ----
@@ -593,6 +611,16 @@ impl App {
                 ),
                 None => ("--.---.--".into(), e.status.clone()),
             };
+            // On the active radio's block everything is one colour,
+            // chosen to be read on it.
+            let on_active = (active && self.rigs.len() > 1)
+                .then(|| theme::hues(&self.theme).rig_text);
+            let ink = move |fallback: fn(&iced::Theme) -> text::Style| {
+                move |theme: &iced::Theme| match on_active {
+                    Some(color) => text::Style { color: Some(color) },
+                    None => fallback(theme),
+                }
+            };
             let block = column![
                 label(format!(
                     "{}{}{}",
@@ -603,10 +631,11 @@ impl App {
                             format!("  ·  {model}"),
                         _ => String::new(),
                     }
-                )),
+                ))
+                .style(ink(muted)),
                 row![
-                    text(freq).font(MONO).size(22),
-                    text(detail).size(ROW_TEXT).style(muted),
+                    text(freq).font(theme::MONO_BOLD).size(22).style(ink(theme::freq)),
+                    text(detail).size(ROW_TEXT).style(ink(muted)),
                 ]
                 .spacing(10)
                 .align_y(iced::Alignment::End),
@@ -617,7 +646,7 @@ impl App {
                     button(block)
                         .padding([2, 6])
                         .on_press(Message::ActiveRigChanged(idx))
-                        .style(theme::tab_style(active)),
+                        .style(theme::rig_style(active)),
                 )
             } else {
                 Element::from(block)
@@ -669,7 +698,7 @@ impl App {
         };
         col = col.push(status_line(wsjtx_color, "WSJT-X", wsjtx_text));
 
-        scrollable(col).into()
+        scrollable(col.width(Length::Fill)).into()
     }
 
     // ---- CW keyer ----
@@ -690,7 +719,7 @@ impl App {
             button(text(caption).size(12))
                 .padding([2, 8])
                 .on_press_maybe(msg)
-                .style(button::secondary)
+                .style(theme::push_button)
         };
         let status: Element<'_, Message> = if connected {
             let dot = if keying { palette.success } else { palette.primary };
@@ -752,7 +781,7 @@ impl App {
                 button(text(caption).size(12))
                     .padding([3, 8])
                     .on_press_maybe(on_press)
-                    .style(button::secondary),
+                    .style(theme::push_button),
             );
         }
 
@@ -817,7 +846,7 @@ impl App {
                     rating_cell(b.night),
                 ]));
             }
-            col = col.push(table);
+            col = col.push(theme::grid(table));
         }
 
         if let Some(updated) = updated_label(&snap.updated) {
@@ -837,16 +866,16 @@ fn condx_stat<'a>(caption: &'static str, value: String) -> Element<'a, Message> 
         .into()
 }
 
-/// A band rating coloured by the theme: good is success, fair is
-/// warning, poor is danger, anything else (or missing) is muted.
-fn rating_cell<'a>(rating: Option<String>) -> text::Text<'a> {
-    let tone = rating.as_deref().and_then(rating_tone);
-    cell(rating.unwrap_or_else(|| "—".into()), W_RATING).style(move |theme: &Theme| match tone {
-        Some(RatingTone::Good) => text::success(theme),
-        Some(RatingTone::Fair) => text::warning(theme),
-        Some(RatingTone::Poor) => text::danger(theme),
-        None => muted(theme),
-    })
+/// A band rating as a filled cell: good, fair or poor each in its status
+/// colour; anything else (or missing) is muted text.
+fn rating_cell<'a>(rating: Option<String>) -> Element<'a, Message> {
+    let tone = match rating.as_deref().and_then(rating_tone) {
+        Some(RatingTone::Good) => Tone::Good,
+        Some(RatingTone::Fair) => Tone::Warn,
+        Some(RatingTone::Poor) => Tone::Bad,
+        None => return cell(rating.unwrap_or_else(|| "—".into()), W_RATING).style(muted).into(),
+    };
+    filled_cell(rating.unwrap_or_default(), W_RATING, tone)
 }
 
 /// `● Name  detail` — one subsystem's state in the Station pane.
