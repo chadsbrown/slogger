@@ -128,6 +128,8 @@ impl Scheme {
             zebra: false,
             bar: self.accent,
             bar_text: ink_on(self.accent),
+            rig: self.accent,
+            rig_text: ink_on(self.accent),
             pane: self.surface,
             chrome: mix(self.background, Color::BLACK, if dark(self.background) { 0.3 } else { 0.22 }),
             button: self.line,
@@ -211,6 +213,10 @@ pub(super) struct Hues {
     /// A title bar or the active tab, and the text on it.
     pub(super) bar: Color,
     pub(super) bar_text: Color,
+    /// The active radio in the Station pane, when there is more than
+    /// one, and everything written on it.
+    pub(super) rig: Color,
+    pub(super) rig_text: Color,
     /// The window frame: what shows around and between the panes.
     pub(super) chrome: Color,
     /// The body of a pane or panel. Tables and entry fields inside it sit
@@ -562,6 +568,8 @@ impl Look {
             zebra: false,
             bar: rgb(self.bar),
             bar_text: rgb(self.bar_text),
+            rig: rgb(self.bar),
+            rig_text: rgb(self.bar_text),
             chrome: rgb(self.chrome),
             pane: rgb(self.pane),
             button: rgb(self.button),
@@ -1622,6 +1630,30 @@ pub(super) fn tab_style(active: bool) -> impl Fn(&Theme, button::Status) -> butt
             } else {
                 Color { a: 0.8, ..text }
             },
+            border: Border {
+                radius: 4.0.into(),
+                ..Border::default()
+            },
+            ..button::Style::default()
+        }
+    }
+}
+
+/// One radio's block in the Station pane, where it is a button that
+/// makes that radio the active one.
+pub(super) fn rig_style(active: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
+    move |theme: &Theme, status| {
+        let hues = hues(theme);
+        let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+        button::Style {
+            background: if active {
+                Some(hues.rig.into())
+            } else if hovered {
+                Some(hues.hover.into())
+            } else {
+                None
+            },
+            text_color: if active { hues.rig_text } else { theme.palette().text },
             border: Border {
                 radius: 4.0.into(),
                 ..Border::default()

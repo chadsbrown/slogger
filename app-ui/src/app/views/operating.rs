@@ -611,6 +611,16 @@ impl App {
                 ),
                 None => ("--.---.--".into(), e.status.clone()),
             };
+            // On the active radio's block everything is one colour,
+            // chosen to be read on it.
+            let on_active = (active && self.rigs.len() > 1)
+                .then(|| theme::hues(&self.theme).rig_text);
+            let ink = move |fallback: fn(&iced::Theme) -> text::Style| {
+                move |theme: &iced::Theme| match on_active {
+                    Some(color) => text::Style { color: Some(color) },
+                    None => fallback(theme),
+                }
+            };
             let block = column![
                 label(format!(
                     "{}{}{}",
@@ -621,10 +631,11 @@ impl App {
                             format!("  ·  {model}"),
                         _ => String::new(),
                     }
-                )),
+                ))
+                .style(ink(muted)),
                 row![
-                    text(freq).font(theme::MONO_BOLD).size(22).style(theme::freq),
-                    text(detail).size(ROW_TEXT).style(muted),
+                    text(freq).font(theme::MONO_BOLD).size(22).style(ink(theme::freq)),
+                    text(detail).size(ROW_TEXT).style(ink(muted)),
                 ]
                 .spacing(10)
                 .align_y(iced::Alignment::End),
@@ -635,7 +646,7 @@ impl App {
                     button(block)
                         .padding([2, 6])
                         .on_press(Message::ActiveRigChanged(idx))
-                        .style(theme::tab_style(active)),
+                        .style(theme::rig_style(active)),
                 )
             } else {
                 Element::from(block)

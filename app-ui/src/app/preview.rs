@@ -149,6 +149,23 @@ fn sample_app() -> App {
         }),
         status: "connected".into(),
     });
+    // SLOGGER_PREVIEW_RIGS=2 adds a second radio, which turns the rig
+    // blocks into buttons with one marked active.
+    if std::env::var("SLOGGER_PREVIEW_RIGS").is_ok_and(|n| n == "2") {
+        app.rigs.push(RigEntry {
+            label: "Second".into(),
+            config: Default::default(),
+            handle: None,
+            snapshot: Some(rig_control::RigSnapshot {
+                vendor: "yaesu".into(),
+                model: "FT-710".into(),
+                freq_hz: Some(7_030_000),
+                mode: Some("CW".into()),
+                at: now,
+            }),
+            status: "connected".into(),
+        });
+    }
 
     let cond = |band: &str, time: &str, rating: &str| BandCondition {
         band: band.into(),

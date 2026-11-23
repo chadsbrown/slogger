@@ -27,6 +27,8 @@ pub enum Role {
     ButtonText,
     Control,
     Accent,
+    Rig,
+    RigText,
     Selection,
     SelectionText,
     Call,
@@ -39,7 +41,7 @@ pub enum Role {
 }
 
 impl Role {
-    pub(in crate::app) const COUNT: usize = 22;
+    pub(in crate::app) const COUNT: usize = 24;
 
     /// Every role, in file and editor order.
     pub(in crate::app) const ALL: [Role; Role::COUNT] = [
@@ -56,6 +58,8 @@ impl Role {
         Role::ButtonText,
         Role::Control,
         Role::Accent,
+        Role::Rig,
+        Role::RigText,
         Role::Selection,
         Role::SelectionText,
         Role::Call,
@@ -83,6 +87,8 @@ impl Role {
             Role::ButtonText => "button_text",
             Role::Control => "control",
             Role::Accent => "accent",
+            Role::Rig => "active_radio",
+            Role::RigText => "active_radio_text",
             Role::Selection => "selection",
             Role::SelectionText => "selection_text",
             Role::Call => "callsign",
@@ -111,6 +117,8 @@ impl Role {
             Role::ButtonText => "Button text",
             Role::Control => "Drop-downs",
             Role::Accent => "Main button, links",
+            Role::Rig => "Active radio",
+            Role::RigText => "Active radio text",
             Role::Selection => "Selected row",
             Role::SelectionText => "Selected row text",
             Role::Call => "Callsigns",
@@ -133,7 +141,9 @@ impl Role {
             | Role::Button
             | Role::ButtonText
             | Role::Control
-            | Role::Accent => "STRUCTURE",
+            | Role::Accent
+            | Role::Rig
+            | Role::RigText => "STRUCTURE",
             Role::Selection | Role::SelectionText => "SELECTION",
             Role::Call | Role::Freq | Role::Band | Role::Mode => "DATA",
             Role::Good | Role::Warn | Role::Bad => "STATUS",
@@ -236,6 +246,8 @@ impl Spec {
                 Role::ButtonText => h.button_text,
                 Role::Control => h.control,
                 Role::Accent => accent,
+                Role::Rig => h.rig,
+                Role::RigText => h.rig_text,
                 Role::Selection => h.select,
                 Role::SelectionText => h.select_text.unwrap_or(text),
                 Role::Call => h.call,
@@ -285,6 +297,8 @@ impl Spec {
             zebra: self.zebra,
             bar: c(Role::Bar),
             bar_text: c(Role::BarText),
+            rig: c(Role::Rig),
+            rig_text: c(Role::RigText),
             chrome: c(Role::Frame),
             pane: c(Role::Pane),
             button: c(Role::Button),
@@ -317,6 +331,7 @@ impl Spec {
         reads(Role::Muted, Role::Pane, 3.0);
         reads(Role::BarText, Role::Bar, 4.5);
         reads(Role::ButtonText, Role::Button, 4.5);
+        reads(Role::RigText, Role::Rig, 4.5);
         for data in [Role::Call, Role::Freq, Role::Band, Role::Mode] {
             reads(data, Role::Field, 4.5);
         }
