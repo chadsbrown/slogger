@@ -220,7 +220,7 @@ fn sample_app() -> App {
     // SLOGGER_PREVIEW_NO_CONDX=1 leaves the CondX panel closed; open, it
     // covers the right-hand end of the Spots table.
     let no_condx = std::env::var("SLOGGER_PREVIEW_NO_CONDX").is_ok();
-    for kind in super::panels::PanelKind::ALL {
+    for kind in super::panels::PanelKind::OPERATING {
         let wanted = !(no_condx && *kind == super::panels::PanelKind::CondX);
         if app.panels.is_open(*kind) != wanted {
             app.panels.toggle(*kind);

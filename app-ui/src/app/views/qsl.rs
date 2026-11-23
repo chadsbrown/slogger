@@ -1,4 +1,5 @@
-//! QSL view — the confirmation workflow canvas. Three panes:
+//! QSL view — the confirmation workflow canvas. Three floating panels
+//! (drawn by [`super::floating`]):
 //!
 //! - **Service status** — one row per upload service with pending count,
 //!   last upload/fetch timestamps, last error inline.
@@ -9,13 +10,11 @@
 
 use std::collections::HashSet;
 
-use iced::widget::pane_grid::{Axis, Configuration, Content, PaneGrid, TitleBar};
 use iced::widget::{
-    button, checkbox, column, container, pick_list, row, rule, scrollable, text,
+    button, checkbox, column, pick_list, row, rule, scrollable, text,
 };
 use iced::{Element, Length};
 use logbook_domain::RecentConfirmation;
-use serde::{Deserialize, Serialize};
 use station_resolver::Resolver;
 
 use crate::app::helpers::service_name;
@@ -23,39 +22,6 @@ use crate::app::message::Message;
 use crate::app::state::App;
 use crate::app::theme::{self, cell, cell_fill, label, muted, table_header, table_row};
 use radio_core::{Qso, QsoId};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum QslPaneKind {
-    Services,
-    Pending,
-    Confirmations,
-}
-
-impl QslPaneKind {
-    fn title(self) -> &'static str {
-        match self {
-            QslPaneKind::Services => "Services",
-            QslPaneKind::Pending => "Pending uploads",
-            QslPaneKind::Confirmations => "Recent confirmations",
-        }
-    }
-}
-
-/// Default QSL canvas split. Service status on top, pending uploads in
-/// the middle (largest pane), confirmations at the bottom.
-pub fn default_qsl_configuration() -> Configuration<QslPaneKind> {
-    Configuration::Split {
-        axis: Axis::Horizontal,
-        ratio: 0.30,
-        a: Box::new(Configuration::Pane(QslPaneKind::Services)),
-        b: Box::new(Configuration::Split {
-            axis: Axis::Horizontal,
-            ratio: 0.55,
-            a: Box::new(Configuration::Pane(QslPaneKind::Pending)),
-            b: Box::new(Configuration::Pane(QslPaneKind::Confirmations)),
-        }),
-    }
-}
 
 /// Identifies one of the 5 confirmation services. Used as the filter
 /// for the Pending pane and the key for per-service action triggers.
@@ -200,31 +166,10 @@ fn confirmations_heading(count: usize, limit: u32) -> String {
 }
 
 pub(in crate::app) fn view(app: &App) -> Element<'_, Message> {
-    let grid = PaneGrid::new(&app.qsl_panes, |_pane_id, kind, _maximized| {
-        let title_bar = TitleBar::new(text(kind.title()).size(13))
-            .padding(4)
-            .style(crate::app::view::title_bar_style);
-        let body: Element<'_, Message> = match kind {
-            QslPaneKind::Services => view_services_pane(app),
-            QslPaneKind::Pending => view_pending_pane(app),
-            QslPaneKind::Confirmations => view_confirmations_pane(app),
-        };
-        Content::new(container(body).padding(8))
-            .title_bar(title_bar)
-            .style(crate::app::view::pane_content_style)
-    })
-    .width(Length::Fill)
-    .height(Length::Fill)
-    .min_size(120.0)
-    .spacing(6)
-    .on_click(Message::PaneClicked)
-    .on_drag(Message::PaneDragged)
-    .on_resize(8, Message::PaneResized);
-
-    container(grid).padding(4).into()
+    super::floating::view(app, &app.qsl_panels)
 }
 
-fn view_services_pane(app: &App) -> Element<'_, Message> {
+pub(in crate::app) fn view_services_pane(app: &App) -> Element<'_, Message> {
     let mut col = column![
         row![
             text("Service").width(Length::Fixed(90.0)),
@@ -403,7 +348,7 @@ Some(s) => {
     }
 }
 
-fn view_pending_pane(app: &App) -> Element<'_, Message> {
+pub(in crate::app) fn view_pending_pane(app: &App) -> Element<'_, Message> {
     let state = &app.qsl_view;
 
     let filter_row = row![
@@ -516,7 +461,7 @@ const W_QSO_TIME: f32 = 128.0;
 const W_BAND: f32 = 40.0;
 const W_MODE: f32 = 44.0;
 
-fn view_confirmations_pane(app: &App) -> Element<'_, Message> {
+pub(in crate::app) fn view_confirmations_pane(app: &App) -> Element<'_, Message> {
     let state = &app.qsl_view;
     let mut out = column![].spacing(4);
     if let Some(e) = &state.confirmations_error {

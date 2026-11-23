@@ -1368,21 +1368,6 @@ pub(super) fn table_line<'a>(cells: Row<'a, Message>) -> Element<'a, Message> {
 
 // ---- containers ----
 
-/// Pane body: a hairline border so the operator can see where panes end.
-pub(super) fn pane_content_style(theme: &Theme) -> container::Style {
-    let ext = theme.extended_palette();
-    container::Style {
-        text_color: Some(theme.palette().text),
-        background: Some(hues(theme).pane.into()),
-        border: Border {
-            color: ext.background.strong.color,
-            width: hues(theme).edge,
-            radius: 4.0.into(),
-        },
-        ..container::Style::default()
-    }
-}
-
 /// Pane title bar: set off from the body so the drag handle reads.
 pub(super) fn title_bar_style(theme: &Theme) -> container::Style {
     let hues = hues(theme);

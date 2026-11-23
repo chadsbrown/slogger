@@ -1,6 +1,7 @@
-//! Free-floating panels for the Operating view.
+//! Free-floating panels, used by every tab (Operating, QSL, Logbook).
 //!
-//! Each panel is an independent rectangle on the Operating canvas: it can
+//! Each tab has its own [`Panels`]: a set of panels on that tab's canvas.
+//! Each panel is an independent rectangle on the canvas: it can
 //! be moved, resized, raised, closed and reopened without affecting any
 //! other panel. Panels may overlap and may leave gaps — nothing tiles.
 //!
@@ -10,9 +11,11 @@
 //!
 //! # Adding a panel
 //!
-//! 1. Add a variant to [`PanelKind`] and list it in [`PanelKind::ALL`].
+//! 1. Add a variant to [`PanelKind`] and list it in its tab's list
+//!    ([`PanelKind::OPERATING`], [`PanelKind::QSL`] or
+//!    [`PanelKind::LOGBOOK`]).
 //! 2. Give it a `title`, a `default_rect` and a `default_open`.
-//! 3. Render its body in `views::operating::App::panel_body`.
+//! 3. Render its body in `views::floating::App::panel_body`.
 //!
 //! Saved layouts that predate the new panel pick it up automatically with
 //! its defaults (see [`Panels::from_saved`]).
@@ -32,17 +35,44 @@ pub enum PanelKind {
     Station,
     Recent,
     CondX,
+    // QSL tab
+    QslServices,
+    QslPending,
+    QslConfirmations,
+    // Logbook tab
+    LogSearch,
+    LogResults,
+    LogDetail,
+    LogAwards,
+    LogTools,
 }
 
 impl PanelKind {
-    /// Every panel, in the order they appear in the panel bar.
-    pub(super) const ALL: &[PanelKind] = &[
+    /// The Operating tab's panels, in the order they appear in its
+    /// panel bar.
+    pub(super) const OPERATING: &[PanelKind] = &[
         PanelKind::Entry,
         PanelKind::Spots,
         PanelKind::Recent,
         PanelKind::Keyer,
         PanelKind::Station,
         PanelKind::CondX,
+    ];
+
+    /// The QSL tab's panels.
+    pub(super) const QSL: &[PanelKind] = &[
+        PanelKind::QslServices,
+        PanelKind::QslPending,
+        PanelKind::QslConfirmations,
+    ];
+
+    /// The Logbook tab's panels.
+    pub(super) const LOGBOOK: &[PanelKind] = &[
+        PanelKind::LogSearch,
+        PanelKind::LogResults,
+        PanelKind::LogDetail,
+        PanelKind::LogAwards,
+        PanelKind::LogTools,
     ];
 
     pub(super) fn title(self) -> &'static str {
@@ -53,6 +83,14 @@ impl PanelKind {
             PanelKind::Station => "Station",
             PanelKind::Recent => "Recent QSOs",
             PanelKind::CondX => "CondX",
+            PanelKind::QslServices => "Services",
+            PanelKind::QslPending => "Pending uploads",
+            PanelKind::QslConfirmations => "Recent confirmations",
+            PanelKind::LogSearch => "Search",
+            PanelKind::LogResults => "Results",
+            PanelKind::LogDetail => "Detail",
+            PanelKind::LogAwards => "Awards",
+            PanelKind::LogTools => "Tools",
         }
     }
 
@@ -73,6 +111,12 @@ impl PanelKind {
     ///
     /// CondX starts closed; when opened it sits over the right-hand end
     /// of Spots (the comment column), clear of the Entry form.
+    ///
+    /// QSL stacks its three panels full width: Services, then Pending
+    /// uploads (the largest), then Recent confirmations. Logbook has
+    /// Search, Results and Detail down the left and Awards over Tools on
+    /// the right. Both match the fixed layouts those tabs had before
+    /// their panels floated.
     pub(super) fn default_rect(self) -> Rect {
         let (x, y, w, h) = match self {
             PanelKind::Spots => (0.00, 0.00, 0.60, 0.68),
@@ -81,6 +125,14 @@ impl PanelKind {
             PanelKind::Station => (0.60, 0.50, 0.40, 0.18),
             PanelKind::Recent => (0.00, 0.68, 1.00, 0.32),
             PanelKind::CondX => (0.36, 0.00, 0.24, 0.42),
+            PanelKind::QslServices => (0.00, 0.00, 1.00, 0.30),
+            PanelKind::QslPending => (0.00, 0.30, 1.00, 0.38),
+            PanelKind::QslConfirmations => (0.00, 0.68, 1.00, 0.32),
+            PanelKind::LogSearch => (0.00, 0.00, 0.65, 0.29),
+            PanelKind::LogResults => (0.00, 0.29, 0.65, 0.37),
+            PanelKind::LogDetail => (0.00, 0.66, 0.65, 0.34),
+            PanelKind::LogAwards => (0.65, 0.00, 0.35, 0.45),
+            PanelKind::LogTools => (0.65, 0.45, 0.35, 0.55),
         };
         Rect { x, y, w, h }
     }
@@ -93,7 +145,15 @@ impl PanelKind {
             | PanelKind::Entry
             | PanelKind::Keyer
             | PanelKind::Station
-            | PanelKind::Recent => true,
+            | PanelKind::Recent
+            | PanelKind::QslServices
+            | PanelKind::QslPending
+            | PanelKind::QslConfirmations
+            | PanelKind::LogSearch
+            | PanelKind::LogResults
+            | PanelKind::LogDetail
+            | PanelKind::LogAwards
+            | PanelKind::LogTools => true,
             // An optional network feed: off until the operator asks, so
             // existing layouts look the same as before it existed.
             PanelKind::CondX => false,
@@ -204,42 +264,55 @@ struct Drag {
     origin: Rect,
 }
 
-/// The set of Operating panels and any drag in progress.
+/// One tab's set of panels and any drag in progress.
 #[derive(Debug, Clone)]
 pub struct Panels {
+    /// The panels this tab has, in panel-bar order.
+    kinds: &'static [PanelKind],
     /// Back-to-front: the last panel is drawn on top.
     panels: Vec<Panel>,
     drag: Option<Drag>,
 }
 
-impl Default for Panels {
-    fn default() -> Self {
+impl Panels {
+    /// The given panels at their default places.
+    pub(super) fn new(kinds: &'static [PanelKind]) -> Self {
         Self {
-            panels: PanelKind::ALL.iter().copied().map(Panel::default_for).collect(),
+            kinds,
+            panels: kinds.iter().copied().map(Panel::default_for).collect(),
             drag: None,
         }
     }
-}
 
-impl Panels {
-    /// Rebuilds the panel set from a saved layout. Stacking order is
-    /// preserved; duplicate entries are dropped; geometry is clamped back
-    /// onto the canvas; and any panel the saved layout doesn't mention
-    /// (added in a newer build) is appended with its defaults.
-    pub(super) fn from_saved(saved: Vec<Panel>) -> Self {
-        let mut panels: Vec<Panel> = Vec::with_capacity(PanelKind::ALL.len());
+    /// Rebuilds a tab's panels from a saved layout. Stacking order is
+    /// preserved; duplicate entries and panels that belong to another
+    /// tab are dropped; geometry is clamped back onto the canvas; and any
+    /// panel the saved layout doesn't mention (added in a newer build) is
+    /// appended with its defaults.
+    pub(super) fn from_saved(kinds: &'static [PanelKind], saved: Vec<Panel>) -> Self {
+        let mut panels: Vec<Panel> = Vec::with_capacity(kinds.len());
         for mut panel in saved {
-            if panels.iter().all(|p| p.kind != panel.kind) {
+            if kinds.contains(&panel.kind) && panels.iter().all(|p| p.kind != panel.kind) {
                 panel.rect = panel.rect.clamped();
                 panels.push(panel);
             }
         }
-        for kind in PanelKind::ALL {
+        for kind in kinds {
             if panels.iter().all(|p| p.kind != *kind) {
                 panels.push(Panel::default_for(*kind));
             }
         }
-        Self { panels, drag: None }
+        Self { kinds, panels, drag: None }
+    }
+
+    /// This tab's panels, in panel-bar order.
+    pub(super) fn kinds(&self) -> &'static [PanelKind] {
+        self.kinds
+    }
+
+    /// Whether `kind` is one of this tab's panels.
+    pub(super) fn has(&self, kind: PanelKind) -> bool {
+        self.kinds.contains(&kind)
     }
 
     /// The state to persist, in stacking order.
@@ -282,7 +355,7 @@ impl Panels {
 
     /// Restores every panel's default position, size and visibility.
     pub(super) fn reset(&mut self) {
-        *self = Self::default();
+        *self = Self::new(self.kinds);
     }
 
     /// Begins moving or resizing a panel, raising it first.
@@ -347,26 +420,68 @@ mod tests {
 
     #[test]
     fn default_panels_fit_on_the_canvas_without_overlapping() {
-        let panels = Panels::default();
-        for kind in PanelKind::ALL {
-            let r = kind.default_rect();
-            assert!(r.x >= 0.0 && r.y >= 0.0 && r.x + r.w <= 1.0001 && r.y + r.h <= 1.0001);
-        }
-        let rects: Vec<Rect> = panels.open().map(|p| p.rect).collect();
-        let open_by_default = PanelKind::ALL.iter().filter(|k| k.default_open()).count();
-        assert_eq!(rects.len(), open_by_default);
-        for (i, a) in rects.iter().enumerate() {
-            for b in &rects[i + 1..] {
-                let overlap_x = a.x < b.x + b.w - 1e-4 && b.x < a.x + a.w - 1e-4;
-                let overlap_y = a.y < b.y + b.h - 1e-4 && b.y < a.y + a.h - 1e-4;
-                assert!(!(overlap_x && overlap_y), "{a:?} overlaps {b:?}");
+        for kinds in [PanelKind::OPERATING, PanelKind::QSL, PanelKind::LOGBOOK] {
+            let panels = Panels::new(kinds);
+            for kind in kinds {
+                let r = kind.default_rect();
+                assert!(r.x >= 0.0 && r.y >= 0.0 && r.x + r.w <= 1.0001 && r.y + r.h <= 1.0001);
+            }
+            let rects: Vec<Rect> = panels.open().map(|p| p.rect).collect();
+            let open_by_default = kinds.iter().filter(|k| k.default_open()).count();
+            assert_eq!(rects.len(), open_by_default);
+            for (i, a) in rects.iter().enumerate() {
+                for b in &rects[i + 1..] {
+                    let overlap_x = a.x < b.x + b.w - 1e-4 && b.x < a.x + a.w - 1e-4;
+                    let overlap_y = a.y < b.y + b.h - 1e-4 && b.y < a.y + a.h - 1e-4;
+                    assert!(!(overlap_x && overlap_y), "{a:?} overlaps {b:?}");
+                }
             }
         }
     }
 
+    /// The QSL and Logbook defaults fill their canvases with no gaps,
+    /// as the fixed layouts they replace did.
+    #[test]
+    fn qsl_and_logbook_defaults_cover_the_whole_canvas() {
+        for kinds in [PanelKind::QSL, PanelKind::LOGBOOK] {
+            let area: f32 = kinds.iter().map(|k| k.default_rect()).map(|r| r.w * r.h).sum();
+            assert!(close(area, 1.0), "{kinds:?} cover {area}");
+        }
+    }
+
+    #[test]
+    fn every_panel_belongs_to_exactly_one_tab() {
+        let all: Vec<PanelKind> = [PanelKind::OPERATING, PanelKind::QSL, PanelKind::LOGBOOK]
+            .concat();
+        for kind in &all {
+            assert_eq!(all.iter().filter(|k| *k == kind).count(), 1, "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn a_saved_panel_from_another_tab_is_ignored() {
+        let stray = vec![Panel {
+            kind: PanelKind::Spots,
+            rect: Rect { x: 0.0, y: 0.0, w: 0.5, h: 0.5 },
+            open: true,
+        }];
+        let panels = Panels::from_saved(PanelKind::QSL, stray);
+        assert_eq!(panels.to_saved().len(), PanelKind::QSL.len());
+        assert!(!panels.to_saved().iter().any(|p| p.kind == PanelKind::Spots));
+    }
+
+    #[test]
+    fn reset_restores_this_tabs_panels_only() {
+        let mut panels = Panels::new(PanelKind::LOGBOOK);
+        panels.toggle(PanelKind::LogTools);
+        panels.reset();
+        assert!(panels.is_open(PanelKind::LogTools));
+        assert_eq!(panels.to_saved().len(), PanelKind::LOGBOOK.len());
+    }
+
     #[test]
     fn moving_one_panel_leaves_the_others_alone() {
-        let mut panels = Panels::default();
+        let mut panels = Panels::new(PanelKind::OPERATING);
         let before: Vec<Panel> = panels.to_saved();
         panels.start_drag(PanelKind::Keyer, DragMode::Move, CANVAS);
         panels.drag_to(Point::new(700.0, 200.0));
@@ -384,7 +499,7 @@ mod tests {
 
     #[test]
     fn a_panel_cannot_be_dragged_off_the_canvas() {
-        let mut panels = Panels::default();
+        let mut panels = Panels::new(PanelKind::OPERATING);
         panels.start_drag(PanelKind::Entry, DragMode::Move, CANVAS);
         panels.drag_to(Point::new(0.0, 0.0));
         panels.drag_to(Point::new(5000.0, -5000.0));
@@ -394,7 +509,7 @@ mod tests {
 
     #[test]
     fn resizing_respects_minimum_size_and_canvas_edge() {
-        let mut panels = Panels::default();
+        let mut panels = Panels::new(PanelKind::OPERATING);
         panels.start_drag(PanelKind::Spots, DragMode::Resize, CANVAS);
         panels.drag_to(Point::new(0.0, 0.0));
         panels.drag_to(Point::new(-5000.0, -5000.0));
@@ -410,7 +525,7 @@ mod tests {
 
     #[test]
     fn pointer_movement_without_a_drag_does_nothing() {
-        let mut panels = Panels::default();
+        let mut panels = Panels::new(PanelKind::OPERATING);
         let before = panels.to_saved();
         panels.drag_to(Point::new(300.0, 300.0));
         assert!(!panels.end_drag());
@@ -419,7 +534,7 @@ mod tests {
 
     #[test]
     fn closing_and_reopening_keeps_placement_and_raises() {
-        let mut panels = Panels::default();
+        let mut panels = Panels::new(PanelKind::OPERATING);
         panels.start_drag(PanelKind::Station, DragMode::Move, CANVAS);
         panels.drag_to(Point::new(0.0, 0.0));
         panels.drag_to(Point::new(-200.0, 0.0));
@@ -437,11 +552,11 @@ mod tests {
 
     #[test]
     fn saved_layout_round_trips_through_json() {
-        let mut panels = Panels::default();
+        let mut panels = Panels::new(PanelKind::OPERATING);
         panels.toggle(PanelKind::Keyer);
         panels.raise(PanelKind::Entry);
         let json = serde_json::to_string(&panels.to_saved()).unwrap();
-        let restored = Panels::from_saved(serde_json::from_str(&json).unwrap());
+        let restored = Panels::from_saved(PanelKind::OPERATING, serde_json::from_str(&json).unwrap());
         assert_eq!(restored.to_saved(), panels.to_saved());
     }
 
@@ -452,8 +567,8 @@ mod tests {
             rect: Rect { x: 0.1, y: 0.1, w: 0.5, h: 0.5 },
             open: false,
         }];
-        let panels = Panels::from_saved(saved);
-        assert_eq!(panels.to_saved().len(), PanelKind::ALL.len());
+        let panels = Panels::from_saved(PanelKind::OPERATING, saved);
+        assert_eq!(panels.to_saved().len(), PanelKind::OPERATING.len());
         assert!(!panels.is_open(PanelKind::Spots));
         assert!(panels.is_open(PanelKind::Keyer));
         assert_eq!(rect_of(&panels, PanelKind::Keyer), PanelKind::Keyer.default_rect());
@@ -461,7 +576,7 @@ mod tests {
 
     #[test]
     fn condx_starts_closed() {
-        assert!(!Panels::default().is_open(PanelKind::CondX));
+        assert!(!Panels::new(PanelKind::OPERATING).is_open(PanelKind::CondX));
     }
 
     /// A layout saved before CondX existed lists only the original five
@@ -469,12 +584,12 @@ mod tests {
     /// default spot, and let the operator open it from the panel bar.
     #[test]
     fn layout_saved_before_condx_gains_it_closed_and_openable() {
-        let old: Vec<Panel> = Panels::default()
+        let old: Vec<Panel> = Panels::new(PanelKind::OPERATING)
             .to_saved()
             .into_iter()
             .filter(|p| p.kind != PanelKind::CondX)
             .collect();
-        let mut panels = Panels::from_saved(old.clone());
+        let mut panels = Panels::from_saved(PanelKind::OPERATING, old.clone());
         assert_eq!(panels.to_saved()[..old.len()], old[..]);
         assert!(!panels.is_open(PanelKind::CondX));
         assert_eq!(rect_of(&panels, PanelKind::CondX), PanelKind::CondX.default_rect());
@@ -491,7 +606,7 @@ mod tests {
             rect: Rect { x: 0.9, y: -3.0, w: 0.4, h: f32::NAN },
             open: true,
         }];
-        let r = rect_of(&Panels::from_saved(saved), PanelKind::Entry);
+        let r = rect_of(&Panels::from_saved(PanelKind::OPERATING, saved), PanelKind::Entry);
         assert!(close(r.x, 0.6) && close(r.y, 0.0) && close(r.w, 0.4) && r.h.is_finite());
     }
 }

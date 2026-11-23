@@ -18,8 +18,14 @@ const VERSION: u32 = 2;
 #[derive(Debug, Serialize, Deserialize)]
 struct LayoutFile {
     version: u32,
-    /// Back-to-front stacking order.
+    /// The Operating tab's panels, in back-to-front stacking order.
     panels: Vec<Panel>,
+    /// The QSL tab's panels; absent in files written before they floated.
+    #[serde(default)]
+    qsl_panels: Vec<Panel>,
+    /// The Logbook tab's panels; absent likewise.
+    #[serde(default)]
+    logbook_panels: Vec<Panel>,
     /// UI scale factor; absent in files written before it existed.
     #[serde(default)]
     font_scale: Option<f32>,
@@ -36,6 +42,8 @@ struct LayoutFile {
 #[derive(Debug, Clone, PartialEq)]
 pub struct SavedUi {
     pub panels: Vec<Panel>,
+    pub qsl_panels: Vec<Panel>,
+    pub logbook_panels: Vec<Panel>,
     pub font_scale: Option<f32>,
     pub theme: Option<String>,
     pub pota: Option<bool>,
@@ -65,6 +73,8 @@ fn parse_layout(contents: &str) -> Option<SavedUi> {
     let file: LayoutFile = serde_json::from_str(contents).ok()?;
     (file.version == VERSION).then_some(SavedUi {
         panels: file.panels,
+        qsl_panels: file.qsl_panels,
+        logbook_panels: file.logbook_panels,
         font_scale: file.font_scale,
         theme: file.theme,
         pota: file.pota,
@@ -81,6 +91,8 @@ pub(super) async fn save_layout(ui: SavedUi) {
     let file = LayoutFile {
         version: VERSION,
         panels: ui.panels,
+        qsl_panels: ui.qsl_panels,
+        logbook_panels: ui.logbook_panels,
         font_scale: ui.font_scale,
         theme: ui.theme,
         pota: ui.pota,
@@ -106,13 +118,15 @@ pub(super) async fn save_layout(ui: SavedUi) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::panels::Panels;
+    use crate::app::panels::{PanelKind, Panels};
 
     #[test]
     fn current_format_parses() {
         let file = LayoutFile {
             version: VERSION,
-            panels: Panels::default().to_saved(),
+            panels: Panels::new(PanelKind::OPERATING).to_saved(),
+            qsl_panels: Panels::new(PanelKind::QSL).to_saved(),
+            logbook_panels: Panels::new(PanelKind::LOGBOOK).to_saved(),
             font_scale: Some(1.2),
             theme: Some("Nord".into()),
             pota: Some(true),
@@ -121,7 +135,9 @@ mod tests {
         assert_eq!(
             parse_layout(&json),
             Some(SavedUi {
-                panels: Panels::default().to_saved(),
+                panels: Panels::new(PanelKind::OPERATING).to_saved(),
+                qsl_panels: Panels::new(PanelKind::QSL).to_saved(),
+                logbook_panels: Panels::new(PanelKind::LOGBOOK).to_saved(),
                 font_scale: Some(1.2),
                 theme: Some("Nord".into()),
                 pota: Some(true),
@@ -141,7 +157,6 @@ mod tests {
     /// new panel joins it closed rather than the layout being discarded.
     #[test]
     fn a_file_from_before_condx_loads_with_condx_closed() {
-        use crate::app::panels::PanelKind;
         let before_condx = r#"{
           "version": 2,
           "panels": [
@@ -156,7 +171,12 @@ mod tests {
         }"#;
         let saved = parse_layout(before_condx).expect("pre-CondX layout should load");
         assert_eq!(saved.font_scale, Some(1.1));
-        let mut panels = Panels::from_saved(saved.panels);
+        // Written before the other tabs' panels floated: those start at
+        // their defaults.
+        assert!(saved.qsl_panels.is_empty() && saved.logbook_panels.is_empty());
+        let qsl = Panels::from_saved(PanelKind::QSL, saved.qsl_panels);
+        assert_eq!(qsl.to_saved(), Panels::new(PanelKind::QSL).to_saved());
+        let mut panels = Panels::from_saved(PanelKind::OPERATING, saved.panels);
         assert!(!panels.is_open(PanelKind::Keyer), "saved choices are kept");
         assert!(!panels.is_open(PanelKind::CondX));
         panels.toggle(PanelKind::CondX);

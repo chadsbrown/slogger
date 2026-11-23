@@ -3,7 +3,6 @@ use std::time::Duration;
 use app_config::{KeyerMacro, MacroContext};
 use chrono::Utc;
 use iced::Task;
-use iced::widget::pane_grid;
 use logbook_domain::{CreateQsoCommand, QsoSearch};
 use lotw_sync::TqslStationData;
 use radio_core::{Band, Callsign, Mode, QsoId, StationLocation, StationLocationId};
@@ -22,7 +21,7 @@ use super::modals::Modal;
 use super::modals::station::{self, StationEditor, StationEditorMsg};
 use super::theme;
 use super::message::{DupeMatch, LogbookSearchResult, Message};
-use super::panels::Panels;
+use super::panels::{PanelKind, Panels};
 use super::services::{format_lotw_fetch, format_multi_summary, run_lotw_sync, run_services_update};
 use super::spots::{SpotSort, build_worked_by_band};
 use super::state::{App, EntryDraft};
@@ -76,7 +75,10 @@ impl App {
                 }
                 self.config = Some(bundle.config);
                 if let Some(saved) = bundle.panel_layout {
-                    self.panels = Panels::from_saved(saved.panels);
+                    self.panels = Panels::from_saved(PanelKind::OPERATING, saved.panels);
+                    self.qsl_panels = Panels::from_saved(PanelKind::QSL, saved.qsl_panels);
+                    self.logbook_panels =
+                        Panels::from_saved(PanelKind::LOGBOOK, saved.logbook_panels);
                     if let Some(scale) = saved.font_scale {
                         self.font_scale = scale.clamp(theme::FONT_SCALE_MIN, theme::FONT_SCALE_MAX);
                     }
@@ -527,56 +529,39 @@ impl App {
                 self.spots_sort = SpotSort::clicked(self.spots_sort, column);
                 Task::none()
             }
-            Message::PaneClicked(_pane) => {
-                // Future: track focused pane for keyboard navigation.
-                Task::none()
-            }
-            // pane_grid events come only from the QSL and Logbook views;
-            // Operating uses free-floating panels instead.
-            Message::PaneDragged(pane_grid::DragEvent::Dropped { pane, target }) => {
-                match self.current_view {
-                    super::views::ViewKind::Logbook => self.logbook_panes.drop(pane, target),
-                    super::views::ViewKind::Qsl => self.qsl_panes.drop(pane, target),
-                    super::views::ViewKind::Operating => {}
-                }
-                Task::none()
-            }
-            Message::PaneDragged(_) => Task::none(),
-            Message::PaneResized(pane_grid::ResizeEvent { split, ratio }) => {
-                match self.current_view {
-                    super::views::ViewKind::Logbook => self.logbook_panes.resize(split, ratio),
-                    super::views::ViewKind::Qsl => self.qsl_panes.resize(split, ratio),
-                    super::views::ViewKind::Operating => {}
-                }
-                Task::none()
-            }
-
-            // ---- Operating panels ----
+            // ---- Floating panels ----
             Message::PanelPressed(kind) => {
-                self.panels.raise(kind);
+                self.panels_with(kind).raise(kind);
                 Task::none()
             }
             Message::PanelDragStarted { kind, mode, canvas } => {
-                self.panels.start_drag(kind, mode, canvas);
+                self.panels_with(kind).start_drag(kind, mode, canvas);
                 Task::none()
             }
             Message::PanelPointerMoved(position) => {
-                self.panels.drag_to(position);
+                for panels in self.all_panels() {
+                    panels.drag_to(position);
+                }
                 Task::none()
             }
             Message::PanelPointerReleased => {
-                if self.panels.end_drag() {
-                    self.save_panel_layout()
-                } else {
-                    Task::none()
+                // Every set is asked, so none is left mid-drag.
+                let mut ended = false;
+                for panels in self.all_panels() {
+                    ended |= panels.end_drag();
                 }
+                if ended { self.save_panel_layout() } else { Task::none() }
             }
             Message::PanelToggled(kind) => {
-                self.panels.toggle(kind);
+                self.panels_with(kind).toggle(kind);
                 self.save_panel_layout()
             }
             Message::PanelsReset => {
-                self.panels.reset();
+                match self.current_view {
+                    super::views::ViewKind::Operating => self.panels.reset(),
+                    super::views::ViewKind::Qsl => self.qsl_panels.reset(),
+                    super::views::ViewKind::Logbook => self.logbook_panels.reset(),
+                }
                 self.save_panel_layout()
             }
             Message::LayoutSaveCompleted => Task::none(),
@@ -1194,6 +1179,21 @@ impl App {
 
     /// Persists the current panel arrangement.
     /// Writes the panel layout, theme and text size to `ui-layout.json`.
+    /// The tab's panel set that `kind` belongs to.
+    fn panels_with(&mut self, kind: PanelKind) -> &mut Panels {
+        if self.qsl_panels.has(kind) {
+            &mut self.qsl_panels
+        } else if self.logbook_panels.has(kind) {
+            &mut self.logbook_panels
+        } else {
+            &mut self.panels
+        }
+    }
+
+    fn all_panels(&mut self) -> [&mut Panels; 3] {
+        [&mut self.panels, &mut self.qsl_panels, &mut self.logbook_panels]
+    }
+
     pub(super) fn save_panel_layout(&self) -> Task<Message> {
         // A theme under edit has no name to come back to.
         if self.theme_editor.is_some() {
@@ -1201,6 +1201,8 @@ impl App {
         }
         let ui = SavedUi {
             panels: self.panels.to_saved(),
+            qsl_panels: self.qsl_panels.to_saved(),
+            logbook_panels: self.logbook_panels.to_saved(),
             font_scale: Some(self.font_scale),
             theme: Some(self.theme.to_string()),
             pota: Some(self.pota_on),

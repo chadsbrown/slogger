@@ -10,10 +10,9 @@
 
 use chrono::{DateTime, Utc};
 use iced::widget::{
-    Id, Space, Stack, button, column, container, mouse_area, pick_list, pin, responsive, row, rule,
-    scrollable, stack, text, text_input,
+    Id, Space, button, column, pick_list, row, rule, scrollable, text, text_input,
 };
-use iced::{Color, Element, Length, Point, Size, Theme, mouse};
+use iced::{Color, Element, Length, Theme};
 use radio_core::Callsign;
 
 use crate::app::condx::{
@@ -25,7 +24,6 @@ use crate::app::focus::{
     ENTRY_CALL_ID, ENTRY_FREQ_ID, ENTRY_RST_RCVD_ID, ENTRY_RST_SENT_ID, KEYER_TEXT_ID,
 };
 use crate::app::message::Message;
-use crate::app::panels::{DragMode, PanelKind};
 use crate::app::pota;
 use crate::app::spots::{
     SpotColumn, SpotInfo, SpotStatus, describe_spot, sort_spots, status_label,
@@ -33,151 +31,12 @@ use crate::app::spots::{
 use spot_feed::Spot;
 use crate::app::state::App;
 use crate::app::theme::{
-    self, LABEL_TEXT, MONO, ROW_TEXT, Tone, cell, cell_fill, cell_right, filled_cell,
+    self, MONO, ROW_TEXT, Tone, cell, cell_fill, cell_right, filled_cell,
     label, muted, table_header, table_line,
 };
 
 pub(in crate::app) fn view(app: &App) -> Element<'_, Message> {
-    // `responsive` hands us the canvas size, which the panels need to turn
-    // their fractional geometry into pixels.
-    let canvas = responsive(move |size| app.panel_canvas(size));
-    column![app.panel_bar(), canvas]
-        .spacing(6)
-        .into()
-}
-
-/// Gap left around each panel so neighbours don't share a border.
-const PANEL_INSET: f32 = 3.0;
-
-impl App {
-    /// One toggle per panel (lit when open) plus "Reset layout". This is
-    /// where a closed panel is brought back.
-    fn panel_bar(&self) -> Element<'_, Message> {
-        // Plain text: this bar sits on the window frame, not on a pane.
-        let mut bar = row![text("PANELS").size(LABEL_TEXT)]
-            .spacing(4)
-            .align_y(iced::Alignment::Center);
-        for kind in PanelKind::ALL {
-            bar = bar.push(
-                button(text(kind.title()).size(12))
-                    .padding([2, 10])
-                    .on_press(Message::PanelToggled(*kind))
-                    .style(theme::frame_toggle_style(self.panels.is_open(*kind))),
-            );
-        }
-        bar = bar.push(Space::new().width(Length::Fill)).push(
-            button(text("Reset layout").size(12))
-                .padding([2, 10])
-                .on_press(Message::PanelsReset)
-                .style(theme::frame_toggle_style(false)),
-        );
-        container(bar.wrap()).padding([0, 4]).width(Length::Fill).into()
-    }
-
-    /// The Operating canvas: every open panel pinned at its own position,
-    /// stacked back-to-front.
-    fn panel_canvas(&self, canvas: Size) -> Element<'_, Message> {
-        let mut layers = Stack::new().width(Length::Fill).height(Length::Fill).clip(true);
-        let backdrop: Element<'_, Message> = if self.panels.open().next().is_none() {
-            container(label("No panels open — choose one from the PANELS bar above."))
-                .center(Length::Fill)
-                .style(theme::canvas_style)
-                .into()
-        } else {
-            container(Space::new())
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .style(theme::canvas_style)
-                .into()
-        };
-        layers = layers.push(backdrop);
-        for panel in self.panels.open() {
-            let (position, size) = panel.rect.to_pixels(canvas);
-            let size = Size::new(
-                (size.width - 2.0 * PANEL_INSET).max(1.0),
-                (size.height - 2.0 * PANEL_INSET).max(1.0),
-            );
-            layers = layers.push(
-                pin(self.panel_frame(panel.kind, size, canvas))
-                    .position(Point::new(position.x + PANEL_INSET, position.y + PANEL_INSET)),
-            );
-        }
-        layers.into()
-    }
-
-    /// A panel's chrome: draggable title bar with a close button, the
-    /// body, and a resize grip in the bottom-right corner.
-    fn panel_frame(&self, kind: PanelKind, size: Size, canvas: Size) -> Element<'_, Message> {
-        let title_bar = mouse_area(
-            container(
-                row![
-                    text(kind.title().to_uppercase()).size(LABEL_TEXT),
-                    Space::new().width(Length::Fill),
-                    button(text("×").size(14))
-                        .padding([0, 6])
-                        .on_press(Message::PanelToggled(kind))
-                        .style(theme::bar_button),
-                ]
-                .align_y(iced::Alignment::Center),
-            )
-            .padding([2, 8])
-            .width(Length::Fill)
-            .style(theme::title_bar_style),
-        )
-        .on_press(Message::PanelDragStarted {
-            kind,
-            mode: DragMode::Move,
-            canvas,
-        })
-        .interaction(mouse::Interaction::Grab);
-
-        let grip = mouse_area(container(text("◢").size(11).style(muted)).padding([0, 2]))
-            .on_press(Message::PanelDragStarted {
-                kind,
-                mode: DragMode::Resize,
-                canvas,
-            })
-            .interaction(mouse::Interaction::ResizingDiagonallyDown);
-
-        let body = stack![
-            container(self.panel_body(kind))
-                .padding(8)
-                .width(Length::Fill)
-                .height(Length::Fill),
-            container(grip)
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .align_x(iced::alignment::Horizontal::Right)
-                .align_y(iced::alignment::Vertical::Bottom),
-        ];
-
-        // The outer mouse_area does two jobs. A click on any inert part of
-        // the panel raises it. And because it claims the pointer over the
-        // whole panel, a panel underneath never sees hovers or clicks
-        // through this one.
-        mouse_area(
-            container(column![title_bar, body])
-                .width(Length::Fixed(size.width))
-                .height(Length::Fixed(size.height))
-                .clip(true)
-                .style(theme::panel_style),
-        )
-        .on_press(Message::PanelPressed(kind))
-        .interaction(mouse::Interaction::Idle)
-        .into()
-    }
-
-    /// The content of each panel. New panels get an arm here.
-    fn panel_body(&self, kind: PanelKind) -> Element<'_, Message> {
-        match kind {
-            PanelKind::Spots => self.spots_pane(),
-            PanelKind::Entry => self.entry_view(),
-            PanelKind::Station => self.station_pane(),
-            PanelKind::Keyer => self.keyer_pane(),
-            PanelKind::Recent => self.recent_pane(),
-            PanelKind::CondX => self.condx_pane(),
-        }
-    }
+    super::floating::view(app, &app.panels)
 }
 
 // Column widths, shared between each table's header and its rows.
@@ -371,7 +230,7 @@ impl App {
 
     // ---- Spots ----
 
-    fn spots_pane(&self) -> Element<'_, Message> {
+    pub(in crate::app) fn spots_pane(&self) -> Element<'_, Message> {
         // Switches POTA spots on and off; lit while on.
         let pota_button = button(
             text(if self.pota_on { "POTA spots on" } else { "POTA spots off" }).size(12),
@@ -598,7 +457,7 @@ impl App {
 
     // ---- Recent QSOs ----
 
-    fn recent_pane(&self) -> Element<'_, Message> {
+    pub(in crate::app) fn recent_pane(&self) -> Element<'_, Message> {
         if self.recent.is_empty() {
             return label("No QSOs logged yet.").into();
         }
@@ -648,7 +507,7 @@ impl App {
 
     // ---- Station ----
 
-    fn station_pane(&self) -> Element<'_, Message> {
+    pub(in crate::app) fn station_pane(&self) -> Element<'_, Message> {
         let palette = self.theme.palette();
         let off = Color { a: 0.3, ..palette.text };
         let mut col = column![].spacing(8);
@@ -765,7 +624,7 @@ impl App {
     /// message buttons (`[[keyer.macro]]`, bound to F1..F12 in order).
     /// Shown even without a keyer so the operator can see what's set up;
     /// the controls are simply inert until one connects.
-    fn keyer_pane(&self) -> Element<'_, Message> {
+    pub(in crate::app) fn keyer_pane(&self) -> Element<'_, Message> {
         let palette = self.theme.palette();
         let connected = self.keyer_active && self.keyer_handle.is_some();
         let keying = self.keyer_snapshot.as_ref().is_some_and(|s| s.keying);
@@ -853,7 +712,7 @@ impl App {
     /// Solar and propagation conditions from hamqsl.com: six headline
     /// figures in a 3×2 grid, N0NBH's day / night rating for each band
     /// group, and when hamqsl last updated them.
-    fn condx_pane(&self) -> Element<'_, Message> {
+    pub(in crate::app) fn condx_pane(&self) -> Element<'_, Message> {
         if !self.condx_active {
             return column![
                 text("CondX not enabled").size(14),

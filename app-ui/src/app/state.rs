@@ -4,7 +4,6 @@ use std::sync::Arc;
 use app_config::Config;
 use condx_feed::CondXSnapshot;
 use iced::Task;
-use iced::widget::pane_grid;
 use keyer_control::{KeyerHandle, KeyerSnapshot};
 use logbook_domain::{AwardsSnapshot, LogbookService, QsoRepository, QsoSummary, StationRepository};
 use radio_core::{Band, Mode, QsoId, StationLocation};
@@ -17,11 +16,10 @@ use super::constants::SPOT_HISTORY_LIMIT;
 use super::drawers::awards::AwardsDrawerState;
 use super::drawers::logbook::LogbookSearchState;
 use super::message::{DupeMatch, Message, MultiUpdateSummary};
-use super::panels::Panels;
+use super::panels::{PanelKind, Panels};
 use super::types::RigEntry;
 use super::views::ViewKind;
-use super::views::logbook::{LogbookPaneKind, default_logbook_configuration};
-use super::views::qsl::{QslPaneKind, QslViewState, default_qsl_configuration};
+use super::views::qsl::QslViewState;
 
 /// The entry form's fields, set aside while an existing QSO is edited.
 #[derive(Debug, Clone)]
@@ -169,12 +167,10 @@ pub struct App {
     /// — operators should always land in Operating after a restart.
     pub(super) current_view: ViewKind,
 
-    /// pane_grid state for the Logbook view. Separate from `panes`
-    /// (Operating) so each view has its own resizable layout.
-    pub(super) logbook_panes: pane_grid::State<LogbookPaneKind>,
-
-    /// pane_grid state for the QSL view.
-    pub(super) qsl_panes: pane_grid::State<QslPaneKind>,
+    /// The QSL tab's floating panels.
+    pub(super) qsl_panels: Panels,
+    /// The Logbook tab's floating panels.
+    pub(super) logbook_panels: Panels,
 
     /// Most recent outcome of `run_services_update`. Held on App
     /// (instead of dropped into self.status) so the QSL view's Service
@@ -255,16 +251,14 @@ impl App {
             condx: None,
             worked_by_band: Default::default(),
             status: theme_problems.into_iter().next(),
-            panels: Panels::default(),
+            panels: Panels::new(PanelKind::OPERATING),
             dupe_check_gen: 0,
             dupe_match: None,
             logbook_search: LogbookSearchState::default(),
             awards_drawer: AwardsDrawerState::default(),
             current_view: ViewKind::default(),
-            logbook_panes: pane_grid::State::with_configuration(
-                default_logbook_configuration(),
-            ),
-            qsl_panes: pane_grid::State::with_configuration(default_qsl_configuration()),
+            qsl_panels: Panels::new(PanelKind::QSL),
+            logbook_panels: Panels::new(PanelKind::LOGBOOK),
             last_services_update: None,
             last_lotw_resync: None,
             qsl_view: QslViewState::default(),

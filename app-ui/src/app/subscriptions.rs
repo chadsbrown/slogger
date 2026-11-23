@@ -54,7 +54,10 @@ impl App {
         subs.push(iced::time::every(std::time::Duration::from_secs(1)).map(|_| Message::Tick));
         // Pointer tracking is only subscribed while a panel is being
         // dragged, so idle mouse movement costs nothing.
-        if self.panels.is_dragging() {
+        if self.panels.is_dragging()
+            || self.qsl_panels.is_dragging()
+            || self.logbook_panels.is_dragging()
+        {
             subs.push(iced::event::listen_with(panel_drag_event));
         }
         if self.spots_active {

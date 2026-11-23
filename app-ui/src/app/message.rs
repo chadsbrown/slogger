@@ -1,4 +1,3 @@
-use iced::widget::pane_grid;
 use logbook_domain::AwardsSnapshot;
 use radio_core::{Band, Mode, QsoId, StationLocation};
 use spot_feed::SpotEvent;
@@ -71,9 +70,6 @@ pub enum Message {
     So2rRxModeSelected(&'static str),
     /// A Spots table column header was clicked.
     SpotsSortClicked(super::spots::SpotColumn),
-    PaneClicked(pane_grid::Pane),
-    PaneDragged(pane_grid::DragEvent),
-    PaneResized(pane_grid::ResizeEvent),
     /// Result of a debounced dupe-check fired from CallChanged /
     /// BandChanged. `generation` is the generation counter at the time
     /// the check was scheduled; the update handler drops the result if
@@ -103,7 +99,7 @@ pub enum Message {
     /// exists so the click is not passed on to the backdrop.
     ModalClicked,
 
-    // ---- Operating panels ----
+    // ---- Floating panels (every tab) ----
     /// A panel was clicked somewhere inert: bring it to the front.
     PanelPressed(PanelKind),
     /// The pointer went down on a panel's title bar (move) or corner
@@ -119,7 +115,8 @@ pub enum Message {
     PanelPointerReleased,
     /// Open a closed panel or close an open one.
     PanelToggled(PanelKind),
-    /// Put every panel back to its default place, size and visibility.
+    /// Put every panel of the tab being shown back to its default
+    /// place, size and visibility.
     PanelsReset,
 
     // ---- Logbook drawer ----

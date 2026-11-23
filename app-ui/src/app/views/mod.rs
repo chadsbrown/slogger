@@ -1,5 +1,5 @@
 //! Top-level views. Each view is a self-contained workflow with its own
-//! pane layout, selected via the tab bar between the persistent header
+//! set of floating panels (see `floating`), selected via the tab bar between the persistent header
 //! strip and the main canvas:
 //!
 //! - **Operating** — live: spots, entry, station state.
@@ -9,6 +9,7 @@
 //! Settings is intentionally not a view — operators edit
 //! `~/.config/slogger/config.toml` directly per the TOML-as-truth model.
 
+pub(super) mod floating;
 pub(super) mod logbook;
 pub(super) mod operating;
 pub(super) mod qsl;

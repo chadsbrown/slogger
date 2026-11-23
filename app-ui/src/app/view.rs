@@ -9,10 +9,6 @@ use super::state::App;
 use super::theme;
 use super::types::StationOption;
 
-// Shared pane chrome, re-exported so the QSL / Logbook views keep their
-// existing `crate::app::view::…` paths.
-pub(super) use super::theme::{pane_content_style, title_bar_style};
-
 impl App {
     pub fn theme(&self) -> iced::Theme {
         self.theme.clone()
