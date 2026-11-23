@@ -624,6 +624,74 @@ const DUOS: &[Look] = &[
         bar: 0xcfcfcf, bar_text: 0x0d47a1, button: 0xffffff,
         select_text: Some(0xffffff), edge: 1.0,
     },
+    Look {
+        name: "Blue & Amber",
+        chrome: 0x0d47a1, pane: 0xd3e0ee, field: 0xffffff, surface: 0xe3f2fd, line: 0x7fa6cf,
+        text: 0x212121, muted: 0x4f5a66, accent: 0x1976d2, call: 0x0d47a1, freq: 0x212121,
+        green: 0x2e7d32, amber: 0xe65100, red: 0xb00020, magenta: 0x7b1fa2, select: 0xffc107,
+        bar: 0x1976d2, bar_text: 0xffffff, button: 0xf5f5f5,
+        select_text: Some(0x000000), edge: 1.0,
+    },
+    Look {
+        name: "Purple & Teal",
+        chrome: 0x4527a0, pane: 0xddd6ec, field: 0xffffff, surface: 0xede7f6, line: 0x9575cd,
+        text: 0x212121, muted: 0x5a5566, accent: 0x673ab7, call: 0x311b92, freq: 0x212121,
+        green: 0x2e7d32, amber: 0xe65100, red: 0xb00020, magenta: 0x7b1fa2, select: 0x00bfa5,
+        bar: 0x673ab7, bar_text: 0xffffff, button: 0xf5f5f5,
+        select_text: Some(0x000000), edge: 1.0,
+    },
+    // Black, white and one yellow bar, for a bright room.
+    Look {
+        name: "Ink & Yellow",
+        chrome: 0x212121, pane: 0xdcdcdc, field: 0xffffff, surface: 0xeeeeee, line: 0x616161,
+        text: 0x000000, muted: 0x424242, accent: 0x424242, call: 0x000000, freq: 0x000000,
+        green: 0x2e7d32, amber: 0xe65100, red: 0xb00020, magenta: 0x7b1fa2, select: 0xffd600,
+        bar: 0x424242, bar_text: 0xffffff, button: 0xf5f5f5,
+        select_text: Some(0x000000), edge: 1.0,
+    },
+    // Warm, with bars that blend into the page.
+    Look {
+        name: "Sand & Indigo",
+        chrome: 0xc9bfae, pane: 0xefe8da, field: 0xfffdf7, surface: 0xe8eaf6, line: 0xa89f8f,
+        text: 0x212121, muted: 0x5c574e, accent: 0x3949ab, call: 0x283593, freq: 0x212121,
+        green: 0x2e7d32, amber: 0xe65100, red: 0xb00020, magenta: 0x7b1fa2, select: 0x3949ab,
+        bar: 0xd0c5b1, bar_text: 0x283593, button: 0xfffdf7,
+        select_text: Some(0xffffff), edge: 1.0,
+    },
+    // Mid-tone: neither a light theme nor a dark one.
+    Look {
+        name: "Fog & Blue",
+        chrome: 0x546e7a, pane: 0xb0bec5, field: 0xeceff1, surface: 0xdce3e6, line: 0x607d8b,
+        text: 0x000000, muted: 0x37474f, accent: 0x37474f, call: 0x263238, freq: 0x000000,
+        green: 0x2e7d32, amber: 0xe65100, red: 0xb00020, magenta: 0x7b1fa2, select: 0x1565c0,
+        bar: 0x37474f, bar_text: 0xffffff, button: 0xeceff1,
+        select_text: Some(0xffffff), edge: 1.0,
+    },
+    // Dark themes on tinted grounds that are not near black.
+    Look {
+        name: "Midnight & Rose",
+        chrome: 0x1b2233, pane: 0x283044, field: 0x364058, surface: 0x445069, line: 0x6b7896,
+        text: 0xffffff, muted: 0xcdd3e0, accent: 0x9fa8da, call: 0xc5cae9, freq: 0xffffff,
+        green: 0xa5d6a7, amber: 0xffb74d, red: 0xff8a80, magenta: 0xce93d8, select: 0xf48fb1,
+        bar: 0x445069, bar_text: 0xffffff, button: 0x445069,
+        select_text: Some(0x000000), edge: 1.0,
+    },
+    Look {
+        name: "Plum & Amber",
+        chrome: 0x2a1f33, pane: 0x3a2c47, field: 0x4a3a5a, surface: 0x594869, line: 0x85749a,
+        text: 0xffffff, muted: 0xd6cde0, accent: 0xb39ddb, call: 0xd1c4e9, freq: 0xffffff,
+        green: 0xa5d6a7, amber: 0xffb74d, red: 0xff8a80, magenta: 0xce93d8, select: 0xffd54f,
+        bar: 0x594869, bar_text: 0xffffff, button: 0x594869,
+        select_text: Some(0x000000), edge: 1.0,
+    },
+    Look {
+        name: "Cocoa & Aqua",
+        chrome: 0x2b211e, pane: 0x3e302b, field: 0x4e3f39, surface: 0x5d4c45, line: 0x8d7a72,
+        text: 0xffffff, muted: 0xd7ccc8, accent: 0xbcaaa4, call: 0xefdcd5, freq: 0xffffff,
+        green: 0xa5d6a7, amber: 0xffb74d, red: 0xff8a80, magenta: 0xce93d8, select: 0x80deea,
+        bar: 0x5d4c45, bar_text: 0xffffff, button: 0x5d4c45,
+        select_text: Some(0x000000), edge: 1.0,
+    },
     // A dark theme that is not very dark: blue-grey grounds.
     Look {
         name: "Dusk & Sky",
