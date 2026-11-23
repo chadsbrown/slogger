@@ -167,27 +167,20 @@ impl App {
                     .worked_by_band
                     .get(&band)
                     .is_some_and(|set| set.contains(&id));
-                lines = lines.push(if worked {
-                    Element::from(
-                        text(format!("entity worked on {}", band.as_adif()))
-                            .size(12)
-                            .style(muted),
-                    )
-                } else {
-                    theme::tone_badge(format!("NEW entity on {}", band.as_adif()), Tone::Good)
-                });
+                if !worked {
+                    lines = lines.push(theme::tone_badge(
+                        format!("NEW entity on {}", band.as_adif()),
+                        Tone::Good,
+                    ));
+                }
             }
         }
 
         if let Some(dupe) = &self.dupe_match {
-            let band = dupe
-                .band
-                .map(|b| b.as_adif().to_string())
-                .unwrap_or_else(|| "?".into());
             // Working a station again is normal outside contests (POTA
             // activators, friends), so this is information, not a warning.
             lines = lines.push(
-                text(format!("worked {} on {band}", dupe.qso_begin.format("%Y-%m-%d")))
+                text(format!("last worked {}", dupe.qso_begin.format("%Y-%m-%d")))
                     .size(12)
                     .style(muted),
             );

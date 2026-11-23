@@ -213,7 +213,6 @@ pub struct LogbookSearchResult {
 #[derive(Debug, Clone)]
 pub struct DupeMatch {
     pub qso_begin: chrono::DateTime<chrono::Utc>,
-    pub band: Option<Band>,
 }
 
 #[derive(Debug, Clone)]

@@ -157,7 +157,6 @@ fn sample_app() -> App {
     app.freq_input = "14025.0".into();
     app.dupe_match = Some(DupeMatch {
         qso_begin: now - Duration::days(40),
-        band: Some(Band::M20),
     });
     app.rigs.push(RigEntry {
         label: "Main".into(),

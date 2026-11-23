@@ -122,7 +122,8 @@ impl App {
                 if let Some(hz) = default_freq_for_band(b) {
                     self.freq_input = format!("{:.4}", hz as f64 / 1_000_000.0);
                 }
-                self.schedule_dupe_check()
+                // The last-worked line covers every band, so it stands.
+                Task::none()
             }
             Message::ModeChanged(m) => {
                 self.mode = Some(m);
@@ -1233,14 +1234,14 @@ impl App {
             // Operator hasn't typed a valid callsign yet; nothing to check.
             return Task::none();
         };
-        let band = self.band;
         Task::perform(
             async move {
                 tokio::time::sleep(Duration::from_millis(250)).await;
+                // Newest first, any band: the last time this station
+                // was worked at all.
                 let qsos = svc
                     .search_qsos(QsoSearch {
                         exact_call: Some(call),
-                        band,
                         limit: Some(1),
                         ..Default::default()
                     })
@@ -1248,7 +1249,6 @@ impl App {
                     .ok();
                 let dupe = qsos.and_then(|q| q.into_iter().next()).map(|q| DupeMatch {
                     qso_begin: q.qso_begin,
-                    band: q.band,
                 });
                 (generation, dupe)
             },
