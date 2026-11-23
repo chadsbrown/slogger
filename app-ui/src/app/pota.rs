@@ -47,6 +47,7 @@ impl Activation {
             comment: self.spot.comment.clone(),
             spotted_at: self.spot.spotted_at,
             first_seen: self.first_seen,
+            origin: Some("POTA spots feed (not the DX cluster)".into()),
         }
     }
 }
@@ -171,6 +172,7 @@ mod tests {
             comment: None,
             spotted_at: at(0),
             first_seen: at(0),
+            origin: None,
         }
     }
 

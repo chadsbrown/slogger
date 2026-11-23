@@ -10,7 +10,8 @@
 
 use chrono::{DateTime, Utc};
 use iced::widget::{
-    Id, Space, button, column, pick_list, row, rule, scrollable, text, text_input,
+    Id, Space, button, column, container, pick_list, row, rule, scrollable, text, text_input,
+    tooltip,
 };
 use iced::{Color, Element, Length, Theme};
 use radio_core::Callsign;
@@ -442,14 +443,26 @@ impl App {
                 .push(cell(info.country.clone().unwrap_or_default(), W_ENTITY).style(tone))
                 .push(comment);
             let is_target = target_dxcc_id.is_some() && info.dxcc_id == target_dxcc_id;
-            rows = rows.push(theme::table_row_at(
+            let line = theme::table_row_at(
                 &self.theme,
                 cells,
                 Message::SpotClicked(spot.clone()),
                 is_target,
                 index,
                 needed.then_some(Tone::Good),
-            ));
+            );
+            // Hovering a row says where the spot came from.
+            rows = rows.push(match &spot.origin {
+                Some(origin) => Element::from(
+                    tooltip(
+                        line,
+                        container(text(origin.clone()).size(12)).padding(6).style(theme::panel_style),
+                        tooltip::Position::FollowCursor,
+                    )
+                    .delay(std::time::Duration::from_millis(600)),
+                ),
+                None => line,
+            });
         }
 
         column![

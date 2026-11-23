@@ -85,6 +85,7 @@ fn sample_app() -> App {
         comment: (!comment.is_empty()).then(|| comment.into()),
         spotted_at: now - Duration::minutes(minutes),
         first_seen: now - Duration::minutes(minutes),
+        origin: Some("cluster: W3LPL (skimmer)  ·  1 report  ·  dxfeed mode CW".into()),
     };
     app.spots_active = true;
     app.spots = [

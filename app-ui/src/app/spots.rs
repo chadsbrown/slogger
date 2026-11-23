@@ -217,6 +217,7 @@ mod tests {
             comment: None,
             spotted_at: chrono::Utc::now(),
             first_seen: chrono::Utc::now(),
+            origin: None,
         }
     }
 

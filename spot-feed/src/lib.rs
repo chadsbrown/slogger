@@ -22,6 +22,9 @@ pub struct Spot {
     /// When the spot first appeared. Unlike `spotted_at` it never changes
     /// as the spot is re-reported, so it gives a stable display order.
     pub first_seen: DateTime<Utc>,
+    /// Where the spot came from, for the operator: who reported it and
+    /// how. Shown when hovering a row; not used for anything else.
+    pub origin: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -193,7 +196,9 @@ impl SpotTracker {
                 let key = spot_event.spot.spot_key.clone();
                 match spot_event.kind {
                     SpotEventKind::New | SpotEventKind::Update => {
+                        let origin = Some(describe_origin(&spot_event.spot));
                         let spot = Spot {
+                            origin,
                             call: spot_event.spot.dx_call,
                             freq_hz: spot_event.spot.freq_hz,
                             mode: dxmode_to_str(spot_event.spot.mode).map(String::from),
@@ -238,6 +243,35 @@ impl SpotTracker {
             _ => Vec::new(),
         }
     }
+}
+
+/// Who reported a cluster spot and what dxfeed made of it, e.g.
+/// "cluster: KU8Y (human) · 1 report · dxfeed mode DIG". The newest
+/// three reporters are named.
+fn describe_origin(spot: &dxfeed::model::DxSpot) -> String {
+    use dxfeed::domain::OriginatorKind;
+    let mut reporters: Vec<String> = Vec::new();
+    for obs in spot.observations.iter().rev() {
+        let kind = match obs.originator_kind {
+            OriginatorKind::Human => "human",
+            OriginatorKind::Skimmer => "skimmer",
+            OriginatorKind::Unknown => "unknown",
+        };
+        let entry = format!("{} ({kind})", obs.originator.0);
+        if !reporters.contains(&entry) {
+            reporters.push(entry);
+        }
+        if reporters.len() == 3 {
+            break;
+        }
+    }
+    let count = spot.observations.len();
+    format!(
+        "cluster: {}  ·  {count} report{}  ·  dxfeed mode {:?}",
+        reporters.join(", "),
+        if count == 1 { "" } else { "s" },
+        spot.mode,
+    )
 }
 
 fn dxmode_to_str(mode: dxfeed::domain::DxMode) -> Option<&'static str> {
