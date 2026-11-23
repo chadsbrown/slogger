@@ -34,6 +34,7 @@ pub struct Config {
     pub keyer: KeyerConfig,
     pub so2r: So2rConfig,
     pub condx: CondXConfig,
+    pub pota: PotaConfig,
 }
 
 impl Config {
@@ -185,6 +186,25 @@ pub struct CondXConfig {
     pub enabled: bool,
     /// Seconds between polls. Default 3600 (hamqsl updates about
     /// hourly); values below 60 are raised to 60.
+    pub refresh_interval_secs: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PotaConfig {
+    /// Whether Parks on the Air activator spots are shown when slogger
+    /// first starts. Off by default so slogger never contacts pota.app
+    /// unasked. The POTA button in the Spots pane switches them on and
+    /// off afterwards, and that choice is remembered in place of this.
+    pub enabled: bool,
+    /// Only show POTA spots on these bands, e.g. `["20m", "40m"]`.
+    /// Empty (the default) shows every band.
+    pub bands: Vec<String>,
+    /// Only show POTA spots in these modes, as POTA names them, e.g.
+    /// `["CW", "SSB"]`. Empty (the default) shows every mode.
+    pub modes: Vec<String>,
+    /// Seconds between polls while switched on. Default 60; values
+    /// below 60 are raised to 60.
     pub refresh_interval_secs: Option<u64>,
 }
 
@@ -479,6 +499,12 @@ mod tests {
                 initial_rx_mode: s(),
             },
             condx: CondXConfig { enabled: true, refresh_interval_secs: Some(1) },
+            pota: PotaConfig {
+                enabled: true,
+                bands: vec!["x".into()],
+                modes: vec!["x".into()],
+                refresh_interval_secs: Some(1),
+            },
         }
     }
 

@@ -95,6 +95,14 @@ pub struct App {
     /// Column sort chosen in the Spots table; `None` is the default
     /// order (newest spot first, stable under re-reports).
     pub(super) spots_sort: Option<super::spots::SpotSort>,
+    /// Whether POTA spots are switched on (the Spots pane's POTA button).
+    pub(super) pota_on: bool,
+    /// Switches the POTA poller; `None` until boot has finished.
+    pub(super) pota_control: Option<pota_feed::PotaControl>,
+    /// POTA spots currently shown: the last poll, filtered, QRT removed.
+    pub(super) pota: Vec<super::pota::Activation>,
+    /// The `[pota]` band and mode filters.
+    pub(super) pota_filter: super::pota::PotaFilter,
     pub(super) wsjtx_active: bool,
     pub(super) wsjtx_bind_addr: Option<String>,
     pub(super) wsjtx_imported: usize,
@@ -225,6 +233,10 @@ impl App {
             spots_status: None,
             spots_needed_only: false,
             spots_sort: None,
+            pota_on: false,
+            pota_control: None,
+            pota: Vec::new(),
+            pota_filter: super::pota::PotaFilter::default(),
             wsjtx_active: false,
             wsjtx_bind_addr: None,
             wsjtx_imported: 0,

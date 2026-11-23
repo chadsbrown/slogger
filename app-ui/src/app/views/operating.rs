@@ -26,7 +26,11 @@ use crate::app::focus::{
 };
 use crate::app::message::Message;
 use crate::app::panels::{DragMode, PanelKind};
-use crate::app::spots::{SpotColumn, SpotStatus, describe_spot, sort_spots, status_label};
+use crate::app::pota;
+use crate::app::spots::{
+    SpotColumn, SpotInfo, SpotStatus, describe_spot, sort_spots, status_label,
+};
+use spot_feed::Spot;
 use crate::app::state::App;
 use crate::app::theme::{
     self, LABEL_TEXT, MONO, ROW_TEXT, Tone, cell, cell_fill, cell_right, filled_cell,
@@ -179,6 +183,8 @@ impl App {
 // Column widths, shared between each table's header and its rows.
 const W_STATUS: f32 = 30.0;
 const W_AGE: f32 = 34.0;
+/// The POTA marker column, present only while POTA spots are on.
+const W_POTA: f32 = 40.0;
 const W_CALL: f32 = 96.0;
 const W_FREQ: f32 = 76.0;
 const W_BAND: f32 = 40.0;
@@ -366,10 +372,21 @@ impl App {
     // ---- Spots ----
 
     fn spots_pane(&self) -> Element<'_, Message> {
-        if !self.spots_active {
+        // Switches POTA spots on and off; lit while on.
+        let pota_button = button(
+            text(if self.pota_on { "POTA spots on" } else { "POTA spots off" }).size(12),
+        )
+        .padding([2, 8])
+        .on_press(Message::TogglePota)
+        .style(if self.pota_on { button::primary } else { theme::push_button });
+
+        if !self.spots_active && !self.pota_on {
             return column![
                 text("DX cluster not configured").size(14),
                 label("Add a [dxcluster] section to config.toml to see live spots here."),
+                row![label("Parks on the Air spots need no setup:"), pota_button]
+                    .spacing(8)
+                    .align_y(iced::Alignment::Center),
             ]
             .spacing(4)
             .into();
@@ -388,13 +405,27 @@ impl App {
 
         // Drop spots older than the age cutoff so the pane reflects current
         // activity rather than a long backlog.
-        let mut recent: Vec<_> = self
-            .spots
+        let fresh = |at: DateTime<Utc>| {
+            now.signed_duration_since(at).num_seconds() <= SPOT_MAX_AGE_SECS as i64
+        };
+        let cluster: Vec<&Spot> = self.spots.iter().filter(|s| fresh(s.spotted_at)).collect();
+        // POTA activators. One the cluster also has on the same band is
+        // that cluster row with its park added; the rest get rows of
+        // their own, with no worked/needed status.
+        let activations: Vec<&pota::Activation> =
+            self.pota.iter().filter(|a| fresh(a.spot.spotted_at)).collect();
+        let pota_only: Vec<Spot> = pota::unmatched(&activations, &cluster);
+        let park = |s: &Spot| pota::activation_for(s, &activations).map(|a| a.park_label());
+        let mut recent: Vec<(&Spot, SpotInfo)> = cluster
             .iter()
-            .filter(|s| {
-                now.signed_duration_since(s.spotted_at).num_seconds() <= SPOT_MAX_AGE_SECS as i64
+            .map(|s| {
+                let info = describe_spot(s, resolver, &self.worked_by_band);
+                (*s, SpotInfo { pota: park(s), ..info })
             })
-            .map(|s| (s, describe_spot(s, resolver, &self.worked_by_band)))
+            .chain(pota_only.iter().map(|s| {
+                let info = describe_spot(s, resolver, &self.worked_by_band);
+                (s, SpotInfo { pota: park(s), status: SpotStatus::Unknown, ..info })
+            }))
             .collect();
         sort_spots(&mut recent, self.spots_sort);
         let total = recent.len();
@@ -404,6 +435,10 @@ impl App {
             .count();
 
         let mut summary = format!("{total} spots  ·  {needed} needed");
+        if self.pota_on {
+            let parks = recent.iter().filter(|(_, info)| info.pota.is_some()).count();
+            summary.push_str(&format!("  ·  {parks} POTA"));
+        }
         if let Some(s) = &self.spots_status {
             summary.push_str(&format!("  ·  {s}"));
         }
@@ -424,6 +459,7 @@ impl App {
             } else {
                 theme::push_button
             }),
+            pota_button,
         ]
         .spacing(8)
         .align_y(iced::Alignment::Center);
@@ -466,16 +502,21 @@ impl App {
                 })
         };
         let fixed = Length::Fixed;
-        let header = table_header(row![
-            head("ST", SpotColumn::Status, fixed(W_STATUS), false),
-            head("AGE", SpotColumn::Age, fixed(W_AGE), true),
-            head("CALL", SpotColumn::Call, fixed(W_CALL), false),
-            head("kHz", SpotColumn::Freq, fixed(W_FREQ), true),
-            head("BAND", SpotColumn::Band, fixed(W_BAND), false),
-            head("MODE", SpotColumn::Mode, fixed(W_MODE), false),
-            head("ENTITY", SpotColumn::Entity, fixed(W_ENTITY), false),
-            head("COMMENT", SpotColumn::Comment, Length::Fill, false),
-        ]);
+        let mut header = row![head("ST", SpotColumn::Status, fixed(W_STATUS), false)];
+        // The POTA marker column exists only while POTA spots are on.
+        if self.pota_on {
+            header = header.push(head("POTA", SpotColumn::Pota, fixed(W_POTA), false));
+        }
+        let header = table_header(
+            header
+                .push(head("AGE", SpotColumn::Age, fixed(W_AGE), true))
+                .push(head("CALL", SpotColumn::Call, fixed(W_CALL), false))
+                .push(head("kHz", SpotColumn::Freq, fixed(W_FREQ), true))
+                .push(head("BAND", SpotColumn::Band, fixed(W_BAND), false))
+                .push(head("MODE", SpotColumn::Mode, fixed(W_MODE), false))
+                .push(head("ENTITY", SpotColumn::Entity, fixed(W_ENTITY), false))
+                .push(head("COMMENT", SpotColumn::Comment, Length::Fill, false)),
+        );
 
         let mut rows = column![].spacing(0);
         for (index, (spot, info)) in recent
@@ -499,20 +540,40 @@ impl App {
             } else {
                 cell(status_label(info.status), W_STATUS).style(muted).into()
             };
-            let cells = row![
-                status,
-                cell_right(age_label(now.signed_duration_since(spot.spotted_at)), W_AGE)
-                    .style(muted),
-                cell(spot.call.as_str(), W_CALL)
-                    .font(theme::MONO_BOLD)
-                    .style(tint(theme::call)),
-                cell_right(khz(spot.freq_hz as i64), W_FREQ).style(tint(theme::freq)),
-                cell(info.band.map(|b| b.as_adif()).unwrap_or(""), W_BAND)
-                    .style(tint(theme::band)),
-                cell(spot.mode.as_deref().unwrap_or(""), W_MODE).style(tint(theme::mode)),
-                cell(info.country.clone().unwrap_or_default(), W_ENTITY).style(tone),
-                cell_fill(spot.comment.as_deref().unwrap_or("")),
-            ];
+            // A POTA activator's park goes ahead of whatever the spot
+            // itself said. Owned: a POTA-only row is built here, not
+            // held in the app.
+            let said = spot.comment.clone().unwrap_or_default();
+            let comment = cell_fill(match &info.pota {
+                Some(park) if said.is_empty() => park.clone(),
+                Some(park) => format!("{park}  ·  {said}"),
+                None => said,
+            });
+            let mut cells = row![status];
+            if self.pota_on {
+                cells = cells.push(match &info.pota {
+                    Some(_) => theme::tag_cell("POTA", W_POTA),
+                    None => cell("", W_POTA).into(),
+                });
+            }
+            let cells = cells
+                .push(
+                    cell_right(age_label(now.signed_duration_since(spot.spotted_at)), W_AGE)
+                        .style(muted),
+                )
+                .push(
+                    cell(spot.call.clone(), W_CALL)
+                        .font(theme::MONO_BOLD)
+                        .style(tint(theme::call)),
+                )
+                .push(cell_right(khz(spot.freq_hz as i64), W_FREQ).style(tint(theme::freq)))
+                .push(
+                    cell(info.band.map(|b| b.as_adif()).unwrap_or(""), W_BAND)
+                        .style(tint(theme::band)),
+                )
+                .push(cell(spot.mode.clone().unwrap_or_default(), W_MODE).style(tint(theme::mode)))
+                .push(cell(info.country.clone().unwrap_or_default(), W_ENTITY).style(tone))
+                .push(comment);
             let is_target = target_dxcc_id.is_some() && info.dxcc_id == target_dxcc_id;
             rows = rows.push(theme::table_row_at(
                 &self.theme,

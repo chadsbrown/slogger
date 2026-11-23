@@ -26,6 +26,10 @@ struct LayoutFile {
     /// Theme name as shown in the picker.
     #[serde(default)]
     theme: Option<String>,
+    /// Whether POTA spots are switched on. Absent until the operator
+    /// first presses the POTA button; `[pota] enabled` decides until then.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pota: Option<bool>,
 }
 
 /// Everything the layout file remembers.
@@ -34,6 +38,7 @@ pub struct SavedUi {
     pub panels: Vec<Panel>,
     pub font_scale: Option<f32>,
     pub theme: Option<String>,
+    pub pota: Option<bool>,
 }
 
 /// Resolves the on-disk path for the saved layout. Returns None if the
@@ -62,6 +67,7 @@ fn parse_layout(contents: &str) -> Option<SavedUi> {
         panels: file.panels,
         font_scale: file.font_scale,
         theme: file.theme,
+        pota: file.pota,
     })
 }
 
@@ -77,6 +83,7 @@ pub(super) async fn save_layout(ui: SavedUi) {
         panels: ui.panels,
         font_scale: ui.font_scale,
         theme: ui.theme,
+        pota: ui.pota,
     };
     let json = match serde_json::to_string_pretty(&file) {
         Ok(s) => s,
@@ -108,6 +115,7 @@ mod tests {
             panels: Panels::default().to_saved(),
             font_scale: Some(1.2),
             theme: Some("Nord".into()),
+            pota: Some(true),
         };
         let json = serde_json::to_string_pretty(&file).unwrap();
         assert_eq!(
@@ -116,6 +124,7 @@ mod tests {
                 panels: Panels::default().to_saved(),
                 font_scale: Some(1.2),
                 theme: Some("Nord".into()),
+                pota: Some(true),
             })
         );
     }
@@ -125,6 +134,7 @@ mod tests {
         let saved = parse_layout(r#"{"version":2,"panels":[]}"#).unwrap();
         assert_eq!(saved.font_scale, None);
         assert_eq!(saved.theme, None);
+        assert_eq!(saved.pota, None);
     }
 
     /// A file written before the CondX panel existed still loads, and the

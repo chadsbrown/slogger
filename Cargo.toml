@@ -11,6 +11,7 @@ members = [
     "condx-feed",
     "hrdlog-sync",
     "keyer-control",
+    "pota-feed",
     "qrz-sync",
     "rig-control",
     "so2r-control",
@@ -37,6 +38,7 @@ clublog-sync = { path = "clublog-sync" }
 condx-feed = { path = "condx-feed" }
 hrdlog-sync = { path = "hrdlog-sync" }
 keyer-control = { path = "keyer-control" }
+pota-feed = { path = "pota-feed" }
 qrz-sync = { path = "qrz-sync" }
 rig-control = { path = "rig-control" }
 so2r-control = { path = "so2r-control" }

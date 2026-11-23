@@ -64,6 +64,16 @@ impl App {
                 self.so2r_status = bundle.so2r_status;
                 self.so2r_handle = bundle.so2r_handle;
                 self.condx_active = bundle.condx_active;
+                self.pota_on = bundle.pota_on;
+                self.pota_control = Some(bundle.pota_control);
+                let (filter, problems) = super::pota::PotaFilter::from_config(&bundle.config.pota);
+                self.pota_filter = filter;
+                for problem in &problems {
+                    tracing::warn!("{problem}");
+                }
+                if let Some(first) = problems.into_iter().next() {
+                    self.status = Some(first);
+                }
                 self.config = Some(bundle.config);
                 if let Some(saved) = bundle.panel_layout {
                     self.panels = Panels::from_saved(saved.panels);
@@ -485,6 +495,28 @@ impl App {
             Message::SpotEvent(SpotEvent::Error { message }) => {
                 tracing::warn!(error = %message, "spot feed error");
                 Task::none()
+            }
+            Message::PotaSpots(spots) => {
+                // A poll that was in flight when POTA was switched off.
+                if self.pota_on {
+                    self.pota = super::pota::refresh(&self.pota, spots, &self.pota_filter);
+                }
+                Task::none()
+            }
+            Message::TogglePota => {
+                self.pota_on = !self.pota_on;
+                if let Some(control) = &self.pota_control {
+                    control.set_enabled(self.pota_on);
+                }
+                if !self.pota_on {
+                    self.pota.clear();
+                    // Its column goes with it, so a sort on it would be
+                    // one the operator can no longer see or undo.
+                    if self.spots_sort.is_some_and(|s| s.column == super::spots::SpotColumn::Pota) {
+                        self.spots_sort = None;
+                    }
+                }
+                self.save_panel_layout()
             }
             Message::SpotClicked(spot) => self.apply_spot(spot),
             Message::ToggleSpotsNeededOnly => {
@@ -1171,6 +1203,7 @@ impl App {
             panels: self.panels.to_saved(),
             font_scale: Some(self.font_scale),
             theme: Some(self.theme.to_string()),
+            pota: Some(self.pota_on),
         };
         Task::perform(save_layout(ui), |()| Message::LayoutSaveCompleted)
     }

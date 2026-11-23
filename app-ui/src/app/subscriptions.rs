@@ -4,6 +4,7 @@ use iced::Subscription;
 use condx_feed::CondXSnapshot;
 use iced::futures::SinkExt;
 use keyer_control::KeyerSnapshot;
+use pota_feed::PotaSpot;
 use so2r_control::So2rSnapshot;
 use spot_feed::SpotEvent;
 use tokio::sync::mpsc;
@@ -20,6 +21,10 @@ use super::views::ViewKind;
 /// `[dxcluster]` config is present; consumed once by `spot_events_stream`
 /// on the first subscription tick.
 pub(super) static SPOT_RX: OnceLock<Mutex<Option<mpsc::Receiver<SpotEvent>>>> = OnceLock::new();
+
+/// POTA activator spots: each item is the whole current list.
+pub(super) static POTA_RX: OnceLock<Mutex<Option<mpsc::Receiver<Vec<PotaSpot>>>>> =
+    OnceLock::new();
 
 /// Same pattern as `SPOT_RX` but for the WSJT-X bridge.
 pub(super) static WSJTX_RX: OnceLock<Mutex<Option<mpsc::Receiver<WsjtxMessage>>>> =
@@ -69,6 +74,10 @@ impl App {
         }
         if self.condx_active {
             subs.push(Subscription::run(condx_events_stream).map(Message::CondXSnapshot));
+        }
+        // Subscribed whenever the poller exists; it is silent while off.
+        if self.pota_control.is_some() {
+            subs.push(Subscription::run(pota_events_stream).map(Message::PotaSpots));
         }
         Subscription::batch(subs)
     }
@@ -196,6 +205,24 @@ fn so2r_events_stream() -> impl iced::futures::Stream<Item = So2rSnapshot> {
         };
         while let Some(s) = rx.recv().await {
             if output.send(s).await.is_err() {
+                break;
+            }
+        }
+    })
+}
+
+fn pota_events_stream() -> impl iced::futures::Stream<Item = Vec<PotaSpot>> {
+    iced::stream::channel(4, async |mut output| {
+        let Some(slot) = POTA_RX.get() else {
+            std::future::pending::<()>().await;
+            return;
+        };
+        let Some(mut rx) = slot.lock().ok().and_then(|mut g| g.take()) else {
+            std::future::pending::<()>().await;
+            return;
+        };
+        while let Some(spots) = rx.recv().await {
+            if output.send(spots).await.is_err() {
                 break;
             }
         }

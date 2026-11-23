@@ -77,6 +77,11 @@ pub struct BootBundle {
     pub so2r_handle: Option<So2rHandle>,
     /// Whether the CondX poller was started (`[condx] enabled = true`).
     pub condx_active: bool,
+    /// Whether POTA spots start switched on: the operator's last choice,
+    /// or `[pota] enabled` if they have never made one.
+    pub pota_on: bool,
+    /// Switches the POTA poller on and off.
+    pub pota_control: pota_feed::PotaControl,
     /// Saved panel layout, theme and text size from `ui-layout.json`, if
     /// present. `None` means nothing has been saved yet (or the file was
     /// unreadable) — the caller keeps the defaults.

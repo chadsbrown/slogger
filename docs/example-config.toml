@@ -181,6 +181,29 @@
 
 
 # ============================================================
+# [pota] — Parks on the Air activator spots
+# ============================================================
+#
+# Shows current POTA activators in the Spots pane, from the public feed
+# at pota.app (no account needed). Each is marked POTA with its park. An
+# activator the DX cluster also has on the same band is one row, not two.
+# Spots marked QRT are dropped. slogger does not record parks or track
+# which you have worked.
+#
+# The POTA button in the Spots pane switches these on and off at any
+# time, and slogger remembers that choice; `enabled` only decides how
+# slogger starts before you have ever pressed the button. While off,
+# slogger never contacts pota.app. This section works without [dxcluster].
+
+[pota]
+# enabled = true                   # default false
+# bands = ["20m", "40m"]           # default: every band
+# modes = ["CW", "SSB"]            # default: every mode. Names as POTA
+#                                  # gives them: CW, SSB, FT8, FT4, FM, AM...
+# refresh_interval_secs = 60       # default 60; minimum 60
+
+
+# ============================================================
 # Sync services
 # ============================================================
 #

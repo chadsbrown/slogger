@@ -155,6 +155,7 @@ dependencies = [
  "keyer-control",
  "logbook-domain",
  "lotw-sync",
+ "pota-feed",
  "qrz-sync",
  "radio-core",
  "rig-control",
@@ -3319,6 +3320,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a106d1259c23fac8e543272398ae0e3c0b8d33c88ed73d0cc71b0f1d902618"
 dependencies = [
  "portable-atomic",
+]
+
+[[package]]
+name = "pota-feed"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

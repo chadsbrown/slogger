@@ -22,6 +22,7 @@ hrdlog-sync.workspace = true
 qrz-sync.workspace = true
 rig-control.workspace = true
 keyer-control.workspace = true
+pota-feed.workspace = true
 so2r-control.workspace = true
 spot-feed.workspace = true
 station-resolver.workspace = true

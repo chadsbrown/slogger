@@ -286,6 +286,46 @@ The active filter file lets you restrict by band/mode/continent/spotter/
 RBN-quality without flooding the UI with stuff you don't care about.
 Format is dxfeed's own JSON schema; see `dxfeed::filter::config::FilterConfigSerde`.
 
+### `[pota]` — Parks on the Air activator spots
+
+```toml
+[pota]
+enabled = true
+bands = ["20m", "40m"]
+modes = ["CW", "SSB"]
+refresh_interval_secs = 60
+```
+
+| Field | Required | Default | Notes |
+|---|---|---|---|
+| `enabled` | no | `false` | Whether POTA spots are on when slogger first starts. The Spots pane's POTA button switches them on and off afterwards, and that choice is remembered (in `ui-layout.json`) and used in place of this. While off, slogger never contacts pota.app. |
+| `bands` | no | all | Only show POTA spots on these bands. A name slogger doesn't recognise is ignored and reported in the log and status bar. |
+| `modes` | no | all | Only show POTA spots in these modes, as POTA names them (`CW`, `SSB`, `FT8`, `FT4`, …). Case-insensitive. |
+| `refresh_interval_secs` | no | 60 | Seconds between polls while on. Values below 60 are raised to 60. |
+
+**What it does**: polls `https://api.pota.app/spot/activator` (the
+feed the POTA website uses; no account or key) and shows the activators
+in the Operating view's **Spots** pane, alongside DX cluster spots. It
+works with or without `[dxcluster]`.
+
+- A **POTA** column appears while POTA spots are on; activator rows are
+  marked in it, and the park (reference, name, region) leads the comment.
+- An activator the cluster also has **on the same band** is one row: the
+  cluster's, with the park added. Otherwise it gets a row of its own.
+- A spot whose comment says **QRT** is dropped: a POTA-only row
+  disappears, and a merged row goes back to being an ordinary cluster
+  spot.
+- POTA rows have **no worked/needed status** of their own (a merged row
+  keeps the DXCC status of its callsign), and slogger stores nothing
+  about parks. Clicking a row tunes the rig and fills the call, as for
+  any spot.
+- The `[dxcluster]` filter file does not apply to POTA spots; `bands`
+  and `modes` above are their filters.
+
+The endpoint is not a versioned public API, so its shape could change.
+`cargo test -p pota-feed live_feed -- --ignored --nocapture` fetches it
+and checks it still parses.
+
 ### `[condx]` — solar / propagation conditions
 
 ```toml

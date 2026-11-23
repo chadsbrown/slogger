@@ -99,6 +99,29 @@ fn sample_app() -> App {
     ]
     .into_iter()
     .collect();
+    // POTA switched on: one activator the cluster also has (DL3ABC,
+    // merged into its row) and two it doesn't.
+    let park = |call: &str, khz: f64, mode: &str, reference: &str, name: &str, region: &str,
+                comment: &str, minutes: i64| super::pota::Activation {
+        spot: pota_feed::PotaSpot {
+            call: call.into(),
+            freq_hz: (khz * 1000.0) as u64,
+            mode: Some(mode.into()),
+            reference: reference.into(),
+            park_name: Some(name.into()),
+            location: Some(region.into()),
+            comment: (!comment.is_empty()).then(|| comment.into()),
+            spotted_at: now - Duration::minutes(minutes),
+            qrt: false,
+        },
+        first_seen: now - Duration::minutes(minutes),
+    };
+    app.pota_on = true;
+    app.pota = vec![
+        park("DL3ABC", 7185.0, "SSB", "DE-0042", "Eifel National Park", "DE-NW", "", 3),
+        park("WC1D", 18072.0, "CW", "US-8390", "Mystic Lakes State Park", "US-MA", "", 4),
+        park("K4SWL", 14061.0, "CW", "US-6856", "Lake James State Park", "US-NC", "QRP 5w", 7),
+    ];
     // Germany and the US are already worked on these bands.
     app.worked_by_band.insert(Band::M40, HashSet::from([230]));
     app.worked_by_band.insert(Band::M6, HashSet::from([291]));
@@ -194,8 +217,12 @@ fn sample_app() -> App {
         ],
     });
     app.status = Some("Logged EA5XYZ on 20M CW".into());
+    // SLOGGER_PREVIEW_NO_CONDX=1 leaves the CondX panel closed; open, it
+    // covers the right-hand end of the Spots table.
+    let no_condx = std::env::var("SLOGGER_PREVIEW_NO_CONDX").is_ok();
     for kind in super::panels::PanelKind::ALL {
-        if !app.panels.is_open(*kind) {
+        let wanted = !(no_condx && *kind == super::panels::PanelKind::CondX);
+        if app.panels.is_open(*kind) != wanted {
             app.panels.toggle(*kind);
         }
     }

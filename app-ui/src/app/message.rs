@@ -46,6 +46,10 @@ pub enum Message {
     SpotEvent(SpotEvent),
     SpotClicked(spot_feed::Spot),
     ToggleSpotsNeededOnly,
+    /// A POTA poll finished: the whole current list of activator spots.
+    PotaSpots(Vec<pota_feed::PotaSpot>),
+    /// The Spots pane's POTA button: switch POTA spots on or off.
+    TogglePota,
     QsoSelected(QsoId),
     QsoLoadedForEdit(Result<logbook_domain::QsoDetail, String>),
     CancelEditPressed,

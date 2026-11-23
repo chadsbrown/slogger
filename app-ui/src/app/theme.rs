@@ -1554,6 +1554,30 @@ pub(super) fn tone_badge<'a>(s: impl text::IntoFragment<'a>, tone: Tone) -> Elem
         .into()
 }
 
+/// A table cell naming what kind of thing a row is ("POTA"), the same
+/// size as a [`cell`] of that width. Filled with the theme's primary
+/// colour rather than a status colour: it names, it doesn't judge.
+pub(super) fn tag_cell<'a>(s: impl text::IntoFragment<'a>, width: f32) -> Element<'a, Message> {
+    container(
+        text(s)
+            .size(ROW_TEXT)
+            .font(MONO_BOLD)
+            .wrapping(text::Wrapping::None),
+    )
+    .width(Length::Fixed(width))
+    .align_x(iced::alignment::Horizontal::Center)
+    .clip(true)
+    .style(move |theme: &Theme| {
+        let fill = theme.palette().primary;
+        container::Style {
+            background: Some(fill.into()),
+            text_color: Some(ink_on(fill)),
+            ..container::Style::default()
+        }
+    })
+    .into()
+}
+
 /// An ordinary push button: a solid face with a border, not a wash of
 /// the background.
 pub(super) fn push_button(theme: &Theme, status: button::Status) -> button::Style {

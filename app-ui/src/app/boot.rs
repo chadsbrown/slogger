@@ -11,6 +11,7 @@ use condx_feed::{CondXConfig as CondXFeedConfig, spawn_condx_feed};
 use keyer_control::{
     KeyerConfig as KeyerClientConfig, connect as connect_keyer,
 };
+use pota_feed::{PotaConfig as PotaFeedConfig, spawn_pota_feed};
 use logbook_domain::{
     CreateQsoCommand, ImportReport, LogbookService, QsoRepository, QsoSearch,
     StationRepository, parse_adif, snapshot as awards_snapshot,
@@ -28,7 +29,7 @@ use super::constants::{
 };
 use super::layout::load_layout;
 use super::message::{ImportSummary, RefreshSnapshot};
-use super::subscriptions::{CONDX_RX, KEYER_RX, RIG_RX, SO2R_RX, SPOT_RX, WSJTX_RX};
+use super::subscriptions::{CONDX_RX, KEYER_RX, POTA_RX, RIG_RX, SO2R_RX, SPOT_RX, WSJTX_RX};
 use super::types::{BootBundle, RigEntry, TaggedRigSnapshot};
 
 pub(super) async fn boot_app() -> Result<BootBundle, String> {
@@ -180,6 +181,18 @@ pub(super) async fn boot_app() -> Result<BootBundle, String> {
     // await point in update().
     let panel_layout = load_layout();
 
+    // Silent until switched on: no request reaches pota.app while off.
+    let pota_on = panel_layout
+        .as_ref()
+        .and_then(|saved| saved.pota)
+        .unwrap_or(config.pota.enabled);
+    let (pota_rx, pota_control) = spawn_pota_feed(&PotaFeedConfig {
+        enabled: pota_on,
+        refresh_interval_secs: config.pota.refresh_interval_secs,
+    });
+    let _ = POTA_RX.set(Mutex::new(Some(pota_rx)));
+    tracing::info!(on = pota_on, "pota feed ready");
+
     Ok(BootBundle {
         service,
         repo,
@@ -199,6 +212,8 @@ pub(super) async fn boot_app() -> Result<BootBundle, String> {
         so2r_status,
         so2r_handle,
         condx_active,
+        pota_on,
+        pota_control,
         panel_layout,
     })
 }

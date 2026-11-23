@@ -28,6 +28,8 @@ pub(super) struct SpotInfo {
     pub band: Option<Band>,
     pub dxcc_id: Option<u16>,
     pub country: Option<String>,
+    /// The park, when this is a POTA activator: "US-8390 Park Name (US-MA)".
+    pub pota: Option<String>,
 }
 
 /// Resolves a spot once and derives its band, entity and need status.
@@ -58,6 +60,7 @@ pub(super) fn describe_spot(
         band,
         dxcc_id,
         country,
+        pota: None,
     }
 }
 
@@ -65,6 +68,8 @@ pub(super) fn describe_spot(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SpotColumn {
     Status,
+    /// POTA activators first when ascending.
+    Pota,
     Age,
     Call,
     Freq,
@@ -128,6 +133,7 @@ pub(super) fn sort_spots(rows: &mut [(&Spot, SpotInfo)], sort: Option<SpotSort>)
     rows.sort_by(|a, b| {
         let by_column = match sort.column {
             SpotColumn::Status => status_rank(a.1.status).cmp(&status_rank(b.1.status)),
+            SpotColumn::Pota => a.1.pota.is_none().cmp(&b.1.pota.is_none()),
             // Ascending age = youngest first = latest report first.
             SpotColumn::Age => b.0.spotted_at.cmp(&a.0.spotted_at),
             SpotColumn::Call => a.0.call.cmp(&b.0.call),
@@ -231,6 +237,7 @@ mod tests {
             band: None,
             dxcc_id: None,
             country: None,
+            pota: None,
         }
     }
 

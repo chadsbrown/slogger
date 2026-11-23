@@ -10,6 +10,7 @@ mod lotw_upload;
 mod message;
 mod modals;
 mod panels;
+mod pota;
 #[cfg(test)]
 mod preview;
 mod services;
