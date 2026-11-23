@@ -1,7 +1,7 @@
 //! Palettes from the Omarchy community theme list (omarchy.org/themes),
 //! generated from each theme's published colours. Only themes whose
 //! repository grants a permissive licence are here; the authors and
-//! licences are listed in `THIRD-PARTY-THEMES.md` at the repository root.
+//! licences are listed in `docs/third-party-themes.md`.
 //! The darkest palettes are left out: on a full window they are hard to
 //! tell apart and harder to read.
 //! Names are prefixed with the family the palette falls in. Colours are
