@@ -371,7 +371,7 @@ impl App {
             bulk_actions,
             assign_location,
             action_status,
-            scrollable(list).height(Length::Fill)
+            theme::grid(scrollable(list).height(Length::Fill))
         ]
             .spacing(8)
             .into()

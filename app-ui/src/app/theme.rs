@@ -119,7 +119,8 @@ impl Scheme {
             select: mix(self.background, self.accent, 0.25),
             bar: self.accent,
             bar_text: ink_on(self.accent),
-            chrome: mix(self.background, Color::BLACK, if dark(self.background) { 0.3 } else { 0.14 }),
+            pane: self.surface,
+            chrome: mix(self.background, Color::BLACK, if dark(self.background) { 0.3 } else { 0.22 }),
             button: self.line,
             button_text: self.text,
             good: self.green,
@@ -165,9 +166,11 @@ pub(super) struct Hues {
     /// A title bar or the active tab, and the text on it.
     pub(super) bar: Color,
     pub(super) bar_text: Color,
-    /// The window frame: what shows around and between the panes that
-    /// hold data, which sit on the theme's background.
+    /// The window frame: what shows around and between the panes.
     pub(super) chrome: Color,
+    /// The body of a pane or panel. Tables and entry fields inside it sit
+    /// on the theme's background, a third tone.
+    pub(super) pane: Color,
     /// A push button's face, and the text on it.
     pub(super) button: Color,
     pub(super) button_text: Color,
@@ -261,7 +264,9 @@ struct Look {
     name: &'static str,
     /// The window frame around the panes.
     chrome: u32,
-    /// Where data sits: tables, panes, entry fields.
+    /// The body of a pane.
+    pane: u32,
+    /// Where data sits inside a pane: tables and entry fields.
     field: u32,
     /// A hovered row.
     surface: u32,
@@ -289,14 +294,15 @@ struct Look {
 
 /// The designed themes, one per lighting condition from brightest room to
 /// darkest, then the look of a DOS logger. Colour is used the way
-/// traditional logging programs use it: data on its own ground inside a
-/// differently toned frame, solid bars and status cells, and plain text
+/// traditional logging programs use it: three grounds (the window frame,
+/// the panes on it, and the tables and fields in them), solid bars and
+/// status cells, and plain text
 /// for everything that is not a callsign, a frequency or a status.
 const LOOKS: &[Look] = &[
     // Sun on the screen: white everywhere, black text, black bars.
     Look {
         name: "Daylight",
-        chrome: 0xe6e6e6, field: 0xffffff, surface: 0xeeeeee, line: 0x707070,
+        chrome: 0xc8c8c8, pane: 0xe9e9e9, field: 0xffffff, surface: 0xe4ecff, line: 0x707070,
         text: 0x000000, muted: 0x484848, accent: 0x0000c0,
         call: 0x0000c0, freq: 0x005a5a,
         green: 0x008000, amber: 0xb05800, red: 0xc80000, magenta: 0x800080,
@@ -305,8 +311,8 @@ const LOOKS: &[Look] = &[
     // A lit room: grey window chrome around white grids.
     Look {
         name: "Office",
-        chrome: 0xc0c0c0, field: 0xffffff, surface: 0xe8e8e8, line: 0x808080,
-        text: 0x000000, muted: 0x505050, accent: 0x000080,
+        chrome: 0x8c8c8c, pane: 0xc8c8c8, field: 0xffffff, surface: 0xe4ecff, line: 0x606060,
+        text: 0x000000, muted: 0x3c3c3c, accent: 0x000080,
         call: 0x0000c0, freq: 0x005a5a,
         green: 0x008000, amber: 0xb05800, red: 0xc00000, magenta: 0x800080,
         select: 0xffe600, bar: 0x000080, bar_text: 0xffffff, button: 0xd4d0c8,
@@ -314,7 +320,7 @@ const LOOKS: &[Look] = &[
     // Lamp light: mid-dark greys, bright text.
     Look {
         name: "Evening",
-        chrome: 0x24262a, field: 0x34373d, surface: 0x41454c, line: 0x5e646e,
+        chrome: 0x141517, pane: 0x383b41, field: 0x212327, surface: 0x2d3036, line: 0x5e646e,
         text: 0xf2f2f2, muted: 0xb4b9c0, accent: 0x2f7cff,
         call: 0xffe000, freq: 0x40e0e0,
         green: 0x20d040, amber: 0xff9500, red: 0xff4040, magenta: 0xff60ff,
@@ -323,29 +329,29 @@ const LOOKS: &[Look] = &[
     // A dark shack: near-black, with everything dimmed.
     Look {
         name: "Night",
-        chrome: 0x000000, field: 0x0c0c0c, surface: 0x181818, line: 0x303030,
+        chrome: 0x000000, pane: 0x161616, field: 0x060606, surface: 0x121212, line: 0x303030,
         text: 0xa8a8a8, muted: 0x808080, accent: 0x3a68b8,
         call: 0xc8a000, freq: 0x00a0a8,
         green: 0x18a030, amber: 0xc07000, red: 0xd03030, magenta: 0xa050a0,
-        select: 0x14284c, bar: 0x283446, bar_text: 0xa8a8a8, button: 0x202020,
+        select: 0x14284c, bar: 0x2c3a50, bar_text: 0xa8a8a8, button: 0x202020,
     },
     // Red only, to keep the eyes adapted to the dark.
     Look {
         name: "Night Red",
-        chrome: 0x000000, field: 0x080000, surface: 0x180000, line: 0x500000,
-        text: 0xff5a4a, muted: 0xe02a2a, accent: 0xc00000,
+        chrome: 0x000000, pane: 0x340000, field: 0x060000, surface: 0x180000, line: 0x600000,
+        text: 0xff5a4a, muted: 0xec3434, accent: 0xc00000,
         call: 0xff8a3c, freq: 0xff5a4a,
         green: 0xff9a00, amber: 0xff6a00, red: 0xff0000, magenta: 0xd03060,
-        select: 0x400000, bar: 0x700000, bar_text: 0xffc0b0, button: 0x2a0000,
+        select: 0x480000, bar: 0x780000, bar_text: 0xffc0b0, button: 0x500000,
     },
     // A DOS contest logger: blue ground, yellow calls, cyan bars.
     Look {
         name: "Classic Blue",
-        chrome: 0x000060, field: 0x0000a8, surface: 0x1818c0, line: 0x5858e0,
+        chrome: 0x000038, pane: 0x0000a8, field: 0x000070, surface: 0x000090, line: 0x5858e0,
         text: 0xffffff, muted: 0xb8b8c8, accent: 0x00a8a8,
         call: 0xffff55, freq: 0x55ffff,
         green: 0x55ff55, amber: 0xffaa00, red: 0xff5555, magenta: 0xff55ff,
-        select: 0x000000, bar: 0x00a8a8, bar_text: 0x000000, button: 0x2828c8,
+        select: 0xa800a8, bar: 0x00a8a8, bar_text: 0x000000, button: 0x2828c8,
     },
 ];
 
@@ -370,6 +376,7 @@ impl Look {
             bar: rgb(self.bar),
             bar_text: rgb(self.bar_text),
             chrome: rgb(self.chrome),
+            pane: rgb(self.pane),
             button: rgb(self.button),
             button_text: rgb(self.text),
             good: rgb(self.green),
@@ -925,7 +932,7 @@ pub(super) fn pane_content_style(theme: &Theme) -> container::Style {
     let ext = theme.extended_palette();
     container::Style {
         text_color: Some(theme.palette().text),
-        background: Some(ext.background.base.color.into()),
+        background: Some(hues(theme).pane.into()),
         border: Border {
             color: ext.background.strong.color,
             width: 1.0,
@@ -955,7 +962,7 @@ pub(super) fn panel_style(theme: &Theme) -> container::Style {
     let ext = theme.extended_palette();
     container::Style {
         text_color: Some(theme.palette().text),
-        background: Some(ext.background.base.color.into()),
+        background: Some(hues(theme).pane.into()),
         border: Border {
             color: ext.background.strong.color,
             width: 1.0,
@@ -990,7 +997,7 @@ pub(super) fn strip_style(theme: &Theme) -> container::Style {
     let ext = theme.extended_palette();
     container::Style {
         text_color: Some(theme.palette().text),
-        background: Some(ext.background.base.color.into()),
+        background: Some(hues(theme).pane.into()),
         border: Border {
             color: ext.background.strong.color,
             width: 1.0,
@@ -998,6 +1005,31 @@ pub(super) fn strip_style(theme: &Theme) -> container::Style {
         },
         ..container::Style::default()
     }
+}
+
+/// The ground tables sit on inside a pane: the theme's background, edged
+/// so it reads as set into the pane.
+pub(super) fn field_style(theme: &Theme) -> container::Style {
+    let ext = theme.extended_palette();
+    container::Style {
+        background: Some(ext.background.base.color.into()),
+        text_color: Some(theme.palette().text),
+        border: Border {
+            color: ext.background.strong.color,
+            width: 1.0,
+            radius: 2.0.into(),
+        },
+        ..container::Style::default()
+    }
+}
+
+/// Sets a table (or any block of data) into its pane on [`field_style`].
+pub(super) fn grid<'a>(content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
+    container(content)
+        .padding(2)
+        .width(Length::Fill)
+        .style(field_style)
+        .into()
 }
 
 /// What a filled status cell says.
@@ -1310,6 +1342,9 @@ palette:
             reads("bar text", h.bar_text, h.bar, 4.5);
             reads("button text", h.button_text, h.button, 4.5);
             reads("frame text", text, h.chrome, 4.5);
+            reads("text on a pane", text, h.pane, 5.5);
+            reads("muted text on a pane", h.muted, h.pane, 4.0);
+            reads("bar on its pane", h.bar, h.pane, 1.3);
             for (what, ink) in [("text", text), ("call", h.call), ("freq", h.freq)] {
                 reads(&format!("{what} on a selected row"), ink, h.select, 4.5);
                 reads(&format!("{what} on a hovered row"), ink, rgb(look.surface), 4.0);
@@ -1319,8 +1354,11 @@ palette:
                 reads(&format!("{what} status text"), fill, field, 3.0);
             }
             // The frame and the bars are tones of their own.
-            assert!(h.chrome != field, "{name}: frame and data share a tone");
-            assert!(contrast(h.bar, field) >= 1.3, "{name}: bar is lost on the data");
+            assert!(
+                h.chrome != h.pane && h.pane != field && h.chrome != field,
+                "{name}: frame, pane and data need a tone each"
+            );
+            assert!(contrast(h.pane, field) >= 1.1, "{name}: fields are lost in the pane");
         }
     }
 

@@ -517,9 +517,10 @@ impl App {
 
         column![
             toolbar,
-            header,
-            rule::horizontal(1),
-            scrollable(rows).height(Length::Fill),
+            theme::grid(
+                column![header, rule::horizontal(1), scrollable(rows).height(Length::Fill)]
+                    .spacing(4)
+            ),
         ]
         .spacing(4)
         .into()
@@ -567,13 +568,9 @@ impl App {
                 self.editing_qso == Some(q.id),
             ));
         }
-        column![
-            header,
-            rule::horizontal(1),
-            scrollable(rows).height(Length::Fill),
-        ]
-        .spacing(4)
-        .into()
+        theme::grid(
+            column![header, rule::horizontal(1), scrollable(rows).height(Length::Fill)].spacing(4),
+        )
     }
 
     // ---- Station ----
@@ -823,7 +820,7 @@ impl App {
                     rating_cell(b.night),
                 ]));
             }
-            col = col.push(table);
+            col = col.push(theme::grid(table));
         }
 
         if let Some(updated) = updated_label(&snap.updated) {

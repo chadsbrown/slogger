@@ -502,7 +502,7 @@ fn view_pending_pane(app: &App) -> Element<'_, Message> {
         filter_row,
         bulk_actions,
         action_status,
-        scrollable(list).height(Length::Fill),
+        theme::grid(scrollable(list).height(Length::Fill)),
     ]
     .spacing(8)
     .into()
@@ -568,9 +568,11 @@ fn view_confirmations_pane(app: &App) -> Element<'_, Message> {
     }
 
     out.push(label(confirmations_heading(rows.len(), RECENT_CONFIRMATIONS_LIMIT)))
-        .push(header)
-        .push(rule::horizontal(1))
-        .push(scrollable(list).height(Length::Fill))
+        .push(theme::grid(column![
+            header,
+            rule::horizontal(1),
+            scrollable(list).height(Length::Fill)
+        ]))
         .into()
 }
 

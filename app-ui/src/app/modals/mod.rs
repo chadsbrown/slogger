@@ -115,7 +115,7 @@ pub(super) fn frame<'a>(
         .style(|theme: &Theme| {
             let ext = theme.extended_palette();
             container::Style {
-                background: Some(ext.background.base.color.into()),
+                background: Some(super::theme::hues(theme).pane.into()),
                 text_color: Some(theme.palette().text),
                 border: Border {
                     color: ext.background.strong.color,

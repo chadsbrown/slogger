@@ -61,7 +61,7 @@ fn tile(theme: &Theme, is_current: bool) -> Element<'static, Message> {
     let palette = theme.extended_palette();
     let background = palette.background.base.color;
     let hues = style::hues(theme);
-    let (bar, name_color) = (hues.bar, hues.bar_text);
+    let (bar, name_color, pane) = (hues.bar, hues.bar_text, hues.pane);
 
     let name_row = row![
         text(theme.to_string())
@@ -102,6 +102,20 @@ fn tile(theme: &Theme, is_current: bool) -> Element<'static, Message> {
         sample("FT8", hues.mode),
     ]
     .spacing(7);
+    // The row sits on the theme's data ground, set into the pane.
+    let line = palette.background.strong.color;
+    let sample_row = container(sample_row)
+        .padding([3, 6])
+        .width(Length::Fill)
+        .style(move |_: &Theme| container::Style {
+            background: Some(background.into()),
+            border: Border {
+                color: line,
+                width: 1.0,
+                radius: 2.0.into(),
+            },
+            ..container::Style::default()
+        });
 
     let swatches = row![
         // Status fills, then the row highlight and the window frame.
@@ -119,7 +133,7 @@ fn tile(theme: &Theme, is_current: bool) -> Element<'static, Message> {
     let inner = container(column![title, body])
         .width(Length::Fill)
         .style(move |_: &Theme| container::Style {
-            background: Some(background.into()),
+            background: Some(pane.into()),
             border: Border {
                 radius: 5.0.into(),
                 ..Border::default()
