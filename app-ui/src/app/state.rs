@@ -198,7 +198,7 @@ impl App {
             syncing: false,
             editing_qso: None,
             qso_detail: None,
-            theme: super::theme::app_theme(),
+            theme: super::theme::default_theme(),
             themes: super::theme::all_themes(),
             font_scale: 1.0,
             modal: None,

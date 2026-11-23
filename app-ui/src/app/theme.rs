@@ -714,6 +714,14 @@ const DUOS: &[Look] = &[
     },
 ];
 
+/// The theme used until one is chosen, and when the saved choice no
+/// longer exists.
+pub(super) fn default_theme() -> Theme {
+    duos().find(|theme| theme.to_string() == DEFAULT_THEME).unwrap_or_else(app_theme)
+}
+
+const DEFAULT_THEME: &str = "Fog & Blue";
+
 fn duos() -> impl Iterator<Item = Theme> {
     DUOS.iter().map(|look| look.scheme().theme_with(look.name, look.hues()))
 }
@@ -1738,6 +1746,13 @@ palette:
         assert_eq!(unique.len(), entries.len());
         assert!(theme_by_name(&entries, "Osaka Jade").is_some());
         assert!(theme_by_name(&entries, "Nope").is_none());
+    }
+
+    #[test]
+    fn the_default_theme_is_one_the_picker_offers() {
+        let default = default_theme().to_string();
+        assert_eq!(default, DEFAULT_THEME);
+        assert!(theme_by_name(&themes_from(None), &default).is_some());
     }
 
     #[test]
