@@ -1522,7 +1522,8 @@ palette:
                 .collect()
         };
         let shipped = names(ThemeSource::Slogger);
-        assert_eq!(shipped[0], "slogger");
+        assert_eq!(shipped[0], "Light Soft");
+        assert_eq!(shipped.last().map(String::as_str), Some("slogger"));
         assert_eq!(shipped.len(), 1 + LOOKS.len());
         assert_eq!(names(ThemeSource::Bundled).len(), BUNDLED.len());
         // Iced already has a "Nord".
