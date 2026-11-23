@@ -29,7 +29,7 @@ use crate::app::panels::{DragMode, PanelKind};
 use crate::app::spots::{SpotColumn, SpotStatus, describe_spot, sort_spots, status_label};
 use crate::app::state::App;
 use crate::app::theme::{
-    self, LABEL_TEXT, MONO, ROW_TEXT, Tone, badge, cell, cell_fill, cell_right, filled_cell,
+    self, LABEL_TEXT, MONO, ROW_TEXT, Tone, cell, cell_fill, cell_right, filled_cell,
     label, muted, table_header, table_line,
 };
 
@@ -277,7 +277,7 @@ impl App {
         .into()
     }
 
-    /// What we know about the callsign being typed: a dupe warning, the
+    /// What we know about the callsign being typed: an earlier contact, the
     /// resolved entity, and whether that entity is needed on this band.
     fn call_info(&self) -> Element<'_, Message> {
         let mut lines = column![].spacing(4);
@@ -319,15 +319,12 @@ impl App {
                 .band
                 .map(|b| b.as_adif().to_string())
                 .unwrap_or_else(|| "?".into());
+            // Working a station again is normal outside contests (POTA
+            // activators, friends), so this is information, not a warning.
             lines = lines.push(
-                row![
-                    badge("DUPE", self.theme.palette().warning),
-                    text(format!("worked {} on {band}", dupe.qso_begin.format("%Y-%m-%d")))
-                        .size(12)
-                        .style(text::warning),
-                ]
-                .spacing(6)
-                .align_y(iced::Alignment::Center),
+                text(format!("worked {} on {band}", dupe.qso_begin.format("%Y-%m-%d")))
+                    .size(12)
+                    .style(muted),
             );
         }
 

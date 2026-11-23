@@ -1583,21 +1583,6 @@ fn ink_toward(color: Color, ground: Color) -> Color {
     if contrast(color, ground) >= 4.5 { color } else { ink_on(ground) }
 }
 
-/// Filled pill for attention-grabbing badges (DUPE, NEW).
-pub(super) fn badge<'a>(s: impl text::IntoFragment<'a>, color: Color) -> Element<'a, Message> {
-    container(text(s).size(12).font(MONO_BOLD).color(ink_on(color)))
-        .padding([1, 6])
-        .style(move |_theme: &Theme| container::Style {
-            background: Some(color.into()),
-            border: Border {
-                radius: 3.0.into(),
-                ..Border::default()
-            },
-            ..container::Style::default()
-        })
-        .into()
-}
-
 /// A text-only button sitting on a title bar.
 pub(super) fn bar_button(theme: &Theme, status: button::Status) -> button::Style {
     let color = hues(theme).bar_text;
