@@ -292,39 +292,140 @@ struct Look {
     button: u32,
 }
 
-/// The designed themes, one per lighting condition from brightest room to
-/// darkest, then the look of a DOS logger. Colour is used the way
-/// traditional logging programs use it: three grounds (the window frame,
-/// the panes on it, and the tables and fields in them), solid bars and
-/// status cells, and plain text
-/// for everything that is not a callsign, a frequency or a status.
+/// The designed themes: six families (Light, Warm, Cool, Grey, Dark,
+/// Blue), each at three strengths of contrast (Soft, Standard, High) so
+/// one can be found for the light in the room, then two for a dark shack.
+/// Colour is used the way traditional logging programs use it: three
+/// grounds (the window frame, the panes on it, and the tables and fields
+/// in them), solid bars and status cells, and plain text for everything
+/// that is not a callsign, a frequency or a status. The family tables are
+/// generated; contrast is checked by the tests below.
 const LOOKS: &[Look] = &[
-    // Sun on the screen: white everywhere, black text, black bars.
     Look {
-        name: "Daylight",
-        chrome: 0xc8c8c8, pane: 0xe9e9e9, field: 0xffffff, surface: 0xe4ecff, line: 0x707070,
-        text: 0x000000, muted: 0x484848, accent: 0x0000c0,
-        call: 0x0000c0, freq: 0x005a5a,
-        green: 0x008000, amber: 0xb05800, red: 0xc80000, magenta: 0x800080,
-        select: 0xffe600, bar: 0x000000, bar_text: 0xffffff, button: 0xd6d6d6,
+        name: "Light Soft",
+        chrome: 0xcacaca, pane: 0xe6e6e6, field: 0xf7f7f7, surface: 0xe3e8f8, line: 0x8c8c8c,
+        text: 0x2e2e2e, muted: 0x5b5b5b, accent: 0x0000a0, call: 0x0000c0, freq: 0x005a5a,
+        green: 0x007000, amber: 0xa85000, red: 0xc00000, magenta: 0x800080, select: 0xffe600,
+        bar: 0x000080, bar_text: 0xffffff, button: 0xf4f4f4,
     },
-    // A lit room: grey window chrome around white grids.
     Look {
-        name: "Office",
-        chrome: 0x8c8c8c, pane: 0xc8c8c8, field: 0xffffff, surface: 0xe4ecff, line: 0x606060,
-        text: 0x000000, muted: 0x3c3c3c, accent: 0x000080,
-        call: 0x0000c0, freq: 0x005a5a,
-        green: 0x008000, amber: 0xb05800, red: 0xc00000, magenta: 0x800080,
-        select: 0xffe600, bar: 0x000080, bar_text: 0xffffff, button: 0xd4d0c8,
+        name: "Light Standard",
+        chrome: 0xb1b1b1, pane: 0xdcdcdc, field: 0xfcfcfc, surface: 0xe8ecfc, line: 0x696969,
+        text: 0x0d0d0d, muted: 0x484848, accent: 0x0000a0, call: 0x0000c0, freq: 0x005a5a,
+        green: 0x007000, amber: 0xa85000, red: 0xc00000, magenta: 0x800080, select: 0xffe600,
+        bar: 0x000080, bar_text: 0xffffff, button: 0xefefef,
     },
-    // Lamp light: mid-dark greys, bright text.
     Look {
-        name: "Evening",
-        chrome: 0x141517, pane: 0x383b41, field: 0x212327, surface: 0x2d3036, line: 0x5e646e,
-        text: 0xf2f2f2, muted: 0xb4b9c0, accent: 0x2f7cff,
-        call: 0xffe000, freq: 0x40e0e0,
-        green: 0x20d040, amber: 0xff9500, red: 0xff4040, magenta: 0xff60ff,
-        select: 0x0048b8, bar: 0x0050c8, bar_text: 0xffffff, button: 0x4c515a,
+        name: "Light High",
+        chrome: 0x808080, pane: 0xd1d1d1, field: 0xffffff, surface: 0xeaefff, line: 0x333333,
+        text: 0x000000, muted: 0x2e2e2e, accent: 0x0000a0, call: 0x0000c0, freq: 0x005a5a,
+        green: 0x007000, amber: 0xa85000, red: 0xc00000, magenta: 0x800080, select: 0xffe600,
+        bar: 0x000080, bar_text: 0xffffff, button: 0xeaeaea,
+    },
+    Look {
+        name: "Warm Soft",
+        chrome: 0xd4c9b7, pane: 0xf0e5d2, field: 0xfcf6ed, surface: 0xe8e7ef, line: 0x958b79,
+        text: 0x322d26, muted: 0x5f5a52, accent: 0x0000a0, call: 0x0000c0, freq: 0x005a5a,
+        green: 0x007000, amber: 0xa85000, red: 0xc00000, magenta: 0x800080, select: 0xffe600,
+        bar: 0x7a1500, bar_text: 0xffffff, button: 0xf8f3eb,
+    },
+    Look {
+        name: "Warm Standard",
+        chrome: 0xbbb09e, pane: 0xe6dbc8, field: 0xfefbf7, surface: 0xe9ecf8, line: 0x726757,
+        text: 0x100d07, muted: 0x4c473f, accent: 0x0000a0, call: 0x0000c0, freq: 0x005a5a,
+        green: 0x007000, amber: 0xa85000, red: 0xc00000, magenta: 0x800080, select: 0xffe600,
+        bar: 0x7a1500, bar_text: 0xffffff, button: 0xf4efe6,
+    },
+    Look {
+        name: "Warm High",
+        chrome: 0x897f6e, pane: 0xdbcfbd, field: 0xffffff, surface: 0xeaefff, line: 0x3a3122,
+        text: 0x000000, muted: 0x322d26, accent: 0x0000a0, call: 0x0000c0, freq: 0x005a5a,
+        green: 0x007000, amber: 0xa85000, red: 0xc00000, magenta: 0x800080, select: 0xffe600,
+        bar: 0x7a1500, bar_text: 0xffffff, button: 0xefe9e1,
+    },
+    Look {
+        name: "Cool Soft",
+        chrome: 0xbfccd8, pane: 0xdbe8f4, field: 0xf1f8fe, surface: 0xdee9fe, line: 0x818e99,
+        text: 0x292e33, muted: 0x565c61, accent: 0x0000a0, call: 0x0000c0, freq: 0x005a5a,
+        green: 0x007000, amber: 0xa85000, red: 0xc00000, magenta: 0x800080, select: 0xffe600,
+        bar: 0x004890, bar_text: 0xffffff, button: 0xeff5fa,
+    },
+    Look {
+        name: "Cool Standard",
+        chrome: 0xa6b3be, pane: 0xd1deea, field: 0xfafcfe, surface: 0xe6ecfe, line: 0x5f6b75,
+        text: 0x090e12, muted: 0x43484d, accent: 0x0000a0, call: 0x0000c0, freq: 0x005a5a,
+        green: 0x007000, amber: 0xa85000, red: 0xc00000, magenta: 0x800080, select: 0xffe600,
+        bar: 0x004890, bar_text: 0xffffff, button: 0xeaf0f6,
+    },
+    Look {
+        name: "Cool High",
+        chrome: 0x76828d, pane: 0xc6d3df, field: 0xffffff, surface: 0xeaefff, line: 0x2a343e,
+        text: 0x000000, muted: 0x292e33, accent: 0x0000a0, call: 0x0000c0, freq: 0x005a5a,
+        green: 0x007000, amber: 0xa85000, red: 0xc00000, magenta: 0x800080, select: 0xffe600,
+        bar: 0x004890, bar_text: 0xffffff, button: 0xe5ebf1,
+    },
+    Look {
+        name: "Grey Soft",
+        chrome: 0x808080, pane: 0xa1a1a1, field: 0xc1c1c1, surface: 0xb2b7c7, line: 0x585858,
+        text: 0x090909, muted: 0x353535, accent: 0x0000a0, call: 0x0000c0, freq: 0x005a5a,
+        green: 0x007000, amber: 0xa85000, red: 0xc00000, magenta: 0x800080, select: 0xffe600,
+        bar: 0x000080, bar_text: 0xffffff, button: 0xd5d5d5,
+    },
+    Look {
+        name: "Grey Standard",
+        chrome: 0x696969, pane: 0x9b9b9b, field: 0xd7d7d7, surface: 0xc6cbdb, line: 0x424242,
+        text: 0x000000, muted: 0x292929, accent: 0x0000a0, call: 0x0000c0, freq: 0x005a5a,
+        green: 0x007000, amber: 0xa85000, red: 0xc00000, magenta: 0x800080, select: 0xffe600,
+        bar: 0x000080, bar_text: 0xffffff, button: 0xd2d2d2,
+    },
+    Look {
+        name: "Grey High",
+        chrome: 0x484848, pane: 0x959595, field: 0xf2f2f2, surface: 0xdfe3f3, line: 0x1f1f1f,
+        text: 0x000000, muted: 0x1b1b1b, accent: 0x0000a0, call: 0x0000c0, freq: 0x005a5a,
+        green: 0x007000, amber: 0xa85000, red: 0xc00000, magenta: 0x800080, select: 0xffe600,
+        bar: 0x000080, bar_text: 0xffffff, button: 0xcfcfcf,
+    },
+    Look {
+        name: "Dark Soft",
+        chrome: 0x343539, pane: 0x535559, field: 0x3f4144, surface: 0x505255, line: 0x7e8084,
+        text: 0xedeef0, muted: 0xc9cacc, accent: 0x2f7cff, call: 0xffe000, freq: 0x40e0e0,
+        green: 0x20d040, amber: 0xff9500, red: 0xff5050, magenta: 0xff60ff, select: 0x0048b8,
+        bar: 0x002e80, bar_text: 0xffffff, button: 0x616366,
+    },
+    Look {
+        name: "Dark Standard",
+        chrome: 0x222427, pane: 0x4e5053, field: 0x323437, surface: 0x444649, line: 0x84868a,
+        text: 0xf4f5f7, muted: 0xc9cacc, accent: 0x2f7cff, call: 0xffe000, freq: 0x40e0e0,
+        green: 0x20d040, amber: 0xff9500, red: 0xff5050, magenta: 0xff60ff, select: 0x0048b8,
+        bar: 0x002e80, bar_text: 0xffffff, button: 0x5c5e61,
+    },
+    Look {
+        name: "Dark High",
+        chrome: 0x0a0b0e, pane: 0x4b4d50, field: 0x1b1d20, surface: 0x303134, line: 0xa2a5a8,
+        text: 0xffffff, muted: 0xd6d7d9, accent: 0x2f7cff, call: 0xffe000, freq: 0x40e0e0,
+        green: 0x20d040, amber: 0xff9500, red: 0xff5050, magenta: 0xff60ff, select: 0x0048b8,
+        bar: 0x002e80, bar_text: 0xffffff, button: 0x595b5e,
+    },
+    Look {
+        name: "Blue Soft",
+        chrome: 0x1b2c51, pane: 0x2d4a88, field: 0x1f376e, surface: 0x33497b, line: 0x7786a5,
+        text: 0xe7effd, muted: 0xc2cbdb, accent: 0x00a8a8, call: 0xffff55, freq: 0x55ffff,
+        green: 0x55ff55, amber: 0xffaa00, red: 0xff6060, magenta: 0xff55ff, select: 0xa800a8,
+        bar: 0x00a8a8, bar_text: 0x000000, button: 0x3e5892,
+    },
+    Look {
+        name: "Blue Standard",
+        chrome: 0x02103e, pane: 0x062da1, field: 0x01166e, surface: 0x182b7b, line: 0x71809f,
+        text: 0xffffff, muted: 0xc9d1e2, accent: 0x00a8a8, call: 0xffff55, freq: 0x55ffff,
+        green: 0x55ff55, amber: 0xffaa00, red: 0xff6060, magenta: 0xff55ff, select: 0xa800a8,
+        bar: 0x00a8a8, bar_text: 0x000000, button: 0x1a3ea9,
+    },
+    Look {
+        name: "Blue High",
+        chrome: 0x000316, pane: 0x0029c1, field: 0x00014c, surface: 0x17185c, line: 0x8f9fbe,
+        text: 0xffffff, muted: 0xd6deef, accent: 0x00a8a8, call: 0xffff55, freq: 0x55ffff,
+        green: 0x55ff55, amber: 0xffaa00, red: 0xff6060, magenta: 0xff55ff, select: 0xa800a8,
+        bar: 0x00a8a8, bar_text: 0x000000, button: 0x143ac6,
     },
     // A dark shack: near-black, with everything dimmed.
     Look {
@@ -343,15 +444,6 @@ const LOOKS: &[Look] = &[
         call: 0xff8a3c, freq: 0xff5a4a,
         green: 0xff9a00, amber: 0xff6a00, red: 0xff0000, magenta: 0xd03060,
         select: 0x480000, bar: 0x780000, bar_text: 0xffc0b0, button: 0x500000,
-    },
-    // A DOS contest logger: blue ground, yellow calls, cyan bars.
-    Look {
-        name: "Classic Blue",
-        chrome: 0x000038, pane: 0x0000a8, field: 0x000070, surface: 0x000090, line: 0x5858e0,
-        text: 0xffffff, muted: 0xb8b8c8, accent: 0x00a8a8,
-        call: 0xffff55, freq: 0x55ffff,
-        green: 0x55ff55, amber: 0xffaa00, red: 0xff5555, magenta: 0xff55ff,
-        select: 0xa800a8, bar: 0x00a8a8, bar_text: 0x000000, button: 0x2828c8,
     },
 ];
 
@@ -1341,7 +1433,7 @@ palette:
             reads("text", text, field, 6.0);
             reads("bar text", h.bar_text, h.bar, 4.5);
             reads("button text", h.button_text, h.button, 4.5);
-            reads("frame text", text, h.chrome, 4.5);
+            reads("frame text", ink_toward(text, h.chrome), h.chrome, 4.5);
             reads("text on a pane", text, h.pane, 5.5);
             reads("muted text on a pane", h.muted, h.pane, 4.0);
             reads("bar on its pane", h.bar, h.pane, 1.3);

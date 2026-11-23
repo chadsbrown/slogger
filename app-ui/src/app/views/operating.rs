@@ -49,7 +49,8 @@ impl App {
     /// One toggle per panel (lit when open) plus "Reset layout". This is
     /// where a closed panel is brought back.
     fn panel_bar(&self) -> Element<'_, Message> {
-        let mut bar = row![label("PANELS")]
+        // Plain text: this bar sits on the window frame, not on a pane.
+        let mut bar = row![text("PANELS").size(LABEL_TEXT)]
             .spacing(4)
             .align_y(iced::Alignment::Center);
         for kind in PanelKind::ALL {
