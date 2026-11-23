@@ -47,6 +47,14 @@ impl App {
             .height(Length::Fill)
             .style(theme::canvas_style)
             .into();
+        // The theme editor docks beside the UI rather than covering it,
+        // so the theme being edited can be seen in use.
+        let main: Element<'_, Message> = match &self.theme_editor {
+            Some(editor) => container(row![main, super::editor::view(editor)])
+                .style(theme::canvas_style)
+                .into(),
+            None => main,
+        };
         match &self.modal {
             Some(modal) => super::modals::overlay(main, self, modal),
             None => main,
@@ -149,7 +157,11 @@ impl App {
             theme::label("THEME"),
             button(text(self.theme.to_string()).size(13))
                 .padding([2, 8])
-                .on_press(Message::OpenModal(super::modals::Modal::ThemePicker))
+                .on_press_maybe(
+                    self.theme_editor
+                        .is_none()
+                        .then_some(Message::OpenModal(super::modals::Modal::ThemePicker)),
+                )
                 .style(theme::tab_style(false)),
         ]
         .spacing(6)

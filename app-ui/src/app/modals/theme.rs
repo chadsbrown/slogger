@@ -13,7 +13,11 @@ use super::super::theme::{self as style, ThemeEntry, ThemeSource};
 const PER_ROW: usize = 3;
 const GAP: f32 = 10.0;
 
-pub(super) fn view<'a>(current: &'a Theme, themes: &'a [ThemeEntry]) -> Element<'a, Message> {
+pub(super) fn view<'a>(
+    current: &'a Theme,
+    themes: &'a [ThemeEntry],
+    delete_armed: bool,
+) -> Element<'a, Message> {
     let current_name = current.to_string();
 
     let mut rows = column![].spacing(GAP).width(Length::Fill);
@@ -47,9 +51,26 @@ pub(super) fn view<'a>(current: &'a Theme, themes: &'a [ThemeEntry]) -> Element<
     .width(Length::Fill)
     .height(Length::Fill);
 
+    // Only a theme file of the user's own can be changed or deleted;
+    // any theme can be copied and the copy edited.
+    let own = themes
+        .iter()
+        .any(|entry| entry.file.is_some() && entry.theme.to_string() == current_name);
+    let action = |caption: &'static str, message: Option<Message>| {
+        button(text(caption).size(13))
+            .padding([3, 10])
+            .on_press_maybe(message)
+            .style(style::push_button)
+    };
     let footer = row![
         style::label("CURRENT"),
-        text(current_name).size(style::ROW_TEXT),
+        text(current_name).size(style::ROW_TEXT).width(Length::Fill),
+        action(
+            if delete_armed { "Really delete?" } else { "Delete" },
+            own.then_some(Message::DeleteTheme),
+        ),
+        action("Edit", own.then_some(Message::EditTheme { copy: false })),
+        action("Edit a copy", Some(Message::EditTheme { copy: true })),
     ]
     .spacing(8)
     .align_y(iced::Alignment::Center);

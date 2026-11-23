@@ -650,13 +650,18 @@ impl App {
             Message::FontScaleReset => self.set_font_scale(1.0),
             Message::ThemeSelected(t) => {
                 self.theme = t;
+                self.theme_delete_armed = false;
                 self.save_panel_layout()
             }
+            Message::EditTheme { copy } => self.edit_theme(copy),
+            Message::DeleteTheme => self.delete_theme(),
+            Message::ThemeEditor(message) => self.update_theme_editor(message),
             Message::OpenModal(modal) => {
                 if matches!(modal, super::modals::Modal::ThemePicker) {
                     // Pick up theme files added or edited since the last
                     // look, including edits to the theme in use.
-                    self.themes = theme::all_themes();
+                    self.reload_themes();
+                    self.theme_delete_armed = false;
                     let current = self.theme.to_string();
                     if let Some(t) = theme::theme_by_name(&self.themes, &current) {
                         self.theme = t;
@@ -1157,7 +1162,11 @@ impl App {
 
     /// Persists the current panel arrangement.
     /// Writes the panel layout, theme and text size to `ui-layout.json`.
-    fn save_panel_layout(&self) -> Task<Message> {
+    pub(super) fn save_panel_layout(&self) -> Task<Message> {
+        // A theme under edit has no name to come back to.
+        if self.theme_editor.is_some() {
+            return Task::none();
+        }
         let ui = SavedUi {
             panels: self.panels.to_saved(),
             font_scale: Some(self.font_scale),

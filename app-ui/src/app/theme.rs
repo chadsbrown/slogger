@@ -30,6 +30,9 @@ pub(super) const ROW_TEXT: f32 = 13.0;
 pub(super) const LABEL_TEXT: f32 = 11.0;
 
 mod community;
+mod spec;
+
+pub(super) use spec::{EDGE_MAX, Role, Spec, from_hsl, to_hex, to_hsl};
 
 /// Everything a theme defines. iced's own [`Palette`] has six of these;
 /// the rest are the surface shades and the extra hues that give a scheme
@@ -222,11 +225,10 @@ pub(super) struct Hues {
     pub(super) bad: Color,
 }
 
-/// How a theme shows a status. Every shipped theme fills a cell; the
-/// other two are kept for themes that want them.
-#[allow(dead_code)]
+/// How a theme shows a status. Every shipped theme fills a cell; a
+/// theme of the user's own can choose.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum StatusLook {
+pub enum StatusLook {
     /// A cell filled with the status colour.
     Cell,
     /// Bold text in the status colour.
@@ -862,7 +864,7 @@ fn schemes(table: &'static [(&'static str, [u32; 12])]) -> impl Iterator<Item = 
 pub(super) enum ThemeSource {
     /// Designed for slogger.
     Slogger,
-    /// A palette file in `~/.config/slogger/themes/`.
+    /// A theme or palette file in `~/.config/slogger/themes/`.
     Custom,
     /// A scheme from elsewhere, shipped with slogger.
     Bundled,
@@ -904,19 +906,45 @@ impl ThemeSource {
 pub(super) struct ThemeEntry {
     pub(super) source: ThemeSource,
     pub(super) theme: Theme,
+    /// The full theme file this came from, if it is one the editor can
+    /// change in place.
+    pub(super) file: Option<PathBuf>,
 }
 
 /// Every theme the picker offers: the ones designed for slogger, palette
 /// files from `~/.config/slogger/themes/`, the bundled collection, then
 /// iced's built-ins. Reads the themes directory, so call it when the list
 /// is needed afresh rather than on every frame.
+#[cfg(test)]
 pub(super) fn all_themes() -> Vec<ThemeEntry> {
-    let custom = dirs::config_dir().map(|d| d.join("slogger").join("themes"));
-    themes_from(custom.as_deref())
+    load_themes().0
 }
 
+/// [`all_themes`], with a note for each theme file (or entry in one)
+/// that could not be used.
+pub(super) fn load_themes() -> (Vec<ThemeEntry>, Vec<String>) {
+    load_from(themes_dir().as_deref())
+}
+
+/// Where the user's theme files live.
+pub(super) fn themes_dir() -> Option<PathBuf> {
+    dirs::config_dir().map(|d| d.join("slogger").join("themes"))
+}
+
+/// The theme the editor panel itself is drawn in, so it stays readable
+/// whatever is being done to the theme under edit.
+pub(super) fn editor_theme() -> Theme {
+    duos().find(|theme| theme.to_string() == "Paper & Blue").unwrap_or_else(app_theme)
+}
+
+#[cfg(test)]
 fn themes_from(custom: Option<&Path>) -> Vec<ThemeEntry> {
-    let entry = |source| move |theme| ThemeEntry { source, theme };
+    load_from(custom).0
+}
+
+fn load_from(custom: Option<&Path>) -> (Vec<ThemeEntry>, Vec<String>) {
+    let entry = |source| move |theme| ThemeEntry { source, theme, file: None };
+    let mut problems = vec![];
     // Families first, three strengths to a picker row; the original
     // theme closes the last row.
     let mut entries: Vec<ThemeEntry> = designed()
@@ -941,31 +969,68 @@ fn themes_from(custom: Option<&Path>) -> Vec<ThemeEntry> {
         .collect();
 
     for (stem, path) in custom.map(theme_files).unwrap_or_default() {
-        let parse = if is_yaml(&path) { parse_base16 } else { parse_palette };
-        let parsed = std::fs::read_to_string(&path)
-            .ok()
-            .and_then(|src| parse(&src, &stem));
-        let Some((name, scheme)) = parsed else {
-            tracing::warn!(path = %path.display(), "skipping unreadable theme file");
-            continue;
+        let shown = path.file_name().and_then(|f| f.to_str()).unwrap_or(&stem).to_owned();
+        let mut problem = |what: String| {
+            tracing::warn!(path = %path.display(), "theme file: {what}");
+            problems.push(format!("theme file {shown}: {what}"));
+        };
+        let (name, parsed) = match read_theme_file(&path, &stem) {
+            Ok((name, parsed, notes)) => {
+                notes.into_iter().for_each(&mut problem);
+                (name, parsed)
+            }
+            Err(why) => {
+                problem(format!("skipped, {why}"));
+                continue;
+            }
         };
         let name = if names.insert(name.clone()) {
             name
         } else {
             let tagged = format!("{name} (custom)");
             if !names.insert(tagged.clone()) {
+                problem(format!("skipped, there is already a theme named {name}"));
                 continue;
             }
             tagged
         };
-        entries.push(ThemeEntry {
-            source: ThemeSource::Custom,
-            theme: scheme.theme(name),
-        });
+        let (theme, file) = match parsed {
+            Parsed::Palette(scheme) => (scheme.theme(name), None),
+            Parsed::Full(spec) => (spec.theme_named(name), Some(path.clone())),
+        };
+        entries.push(ThemeEntry { source: ThemeSource::Custom, theme, file });
     }
     entries.extend(bundled);
     entries.extend(built_in);
-    entries
+    (entries, problems)
+}
+
+enum Parsed {
+    /// A handful of colours; slogger decides where they go.
+    Palette(Scheme),
+    /// Every colour and option.
+    Full(Box<Spec>),
+}
+
+/// Reads one theme file: its name, what it holds, and a note for each
+/// entry that could not be used. `Err` says why the file is no theme.
+fn read_theme_file(path: &Path, stem: &str) -> Result<(String, Parsed, Vec<String>), String> {
+    let src = std::fs::read_to_string(path).map_err(|e| format!("could not be read ({e})"))?;
+    if is_yaml(path) {
+        let (name, scheme) = parse_base16(&src, stem)
+            .ok_or("it has no base00 and base05 colours")?;
+        return Ok((name, Parsed::Palette(scheme), vec![]));
+    }
+    let table: toml::Table = src
+        .parse()
+        .map_err(|e: toml::de::Error| format!("it is not valid TOML ({})", e.message()))?;
+    if spec::is_spec(&table) {
+        let (spec, notes) = Spec::from_table(&table, stem)?;
+        return Ok((spec.name.clone(), Parsed::Full(Box::new(spec)), notes));
+    }
+    let (name, scheme) = parse_palette(&table, stem)
+        .ok_or("it has no background and foreground colours")?;
+    Ok((name, Parsed::Palette(scheme), vec![]))
 }
 
 /// The palette files in the themes directory, as `(stem, path)` sorted by
@@ -1082,8 +1147,7 @@ fn parse_base16(src: &str, stem: &str) -> Option<(String, Scheme)> {
 /// `cyan`, `magenta`, `orange`, `muted`, `lighter_background` and
 /// `selection` are used when present. An optional `name` overrides the
 /// one derived from the file's stem.
-fn parse_palette(src: &str, stem: &str) -> Option<(String, Scheme)> {
-    let table: toml::Table = src.parse().ok()?;
+fn parse_palette(table: &toml::Table, stem: &str) -> Option<(String, Scheme)> {
     let get = |key: &str| table.get(key).and_then(|v| v.as_str()).and_then(parse_hex);
     let scheme = scheme_from(|field| match field {
         "text" => get("foreground"),
@@ -1632,6 +1696,10 @@ pub(super) fn format_rig_freq(hz: u64) -> String {
 mod tests {
     use super::*;
 
+    fn palette_of(src: &str, stem: &str) -> Option<(String, Scheme)> {
+        parse_palette(&src.parse().ok()?, stem)
+    }
+
     const JADE: &str = r##"
 mode = "dark"
 accent = "#509475"
@@ -1646,7 +1714,7 @@ cyan = "#2DD5B7"
 
     #[test]
     fn a_palette_file_maps_onto_the_theme_colours() {
-        let (name, scheme) = parse_palette(JADE, "osaka-jade").unwrap();
+        let (name, scheme) = palette_of(JADE, "osaka-jade").unwrap();
         assert_eq!(name, "Osaka Jade");
         assert_eq!(scheme.background, rgb(0x111c18));
         assert_eq!(scheme.text, rgb(0xc1c497));
@@ -1658,10 +1726,10 @@ cyan = "#2DD5B7"
 
     #[test]
     fn a_palette_needs_a_background_and_a_foreground() {
-        assert!(parse_palette("background = \"#000000\"", "x").is_none());
-        assert!(parse_palette("not toml at all [", "x").is_none());
+        assert!(palette_of("background = \"#000000\"", "x").is_none());
+        assert!(palette_of("not toml at all [", "x").is_none());
         let (name, scheme) =
-            parse_palette("name = \"Mine\"\nbackground = \"000000\"\nforeground = \"#ffffff\"", "x")
+            palette_of("name = \"Mine\"\nbackground = \"000000\"\nforeground = \"#ffffff\"", "x")
                 .unwrap();
         assert_eq!(name, "Mine");
         assert_eq!(scheme.accent, SLOGGER.palette().primary);

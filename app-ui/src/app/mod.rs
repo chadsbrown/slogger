@@ -2,6 +2,7 @@ mod boot;
 mod condx;
 mod constants;
 mod drawers;
+mod editor;
 mod focus;
 mod helpers;
 mod layout;

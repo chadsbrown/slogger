@@ -230,8 +230,18 @@ fn render_theme_previews() {
             if view == "picker" {
                 app.modal = Some(Modal::ThemePicker);
             }
+            if view == "editor" {
+                use super::editor::EditorMessage;
+                let _ = app.edit_theme(true);
+                let _ = app.update_theme_editor(EditorMessage::Toggle(super::theme::Role::Pane));
+            }
+            let drawn = app.theme.clone();
             let mut ui = Simulator::with_size(Settings::default(), WINDOW, app.view());
-            let shot = ui.snapshot(&theme).expect("snapshot");
+            let shot = ui.snapshot(&drawn).expect("snapshot");
+            drop(ui);
+            if view == "editor" {
+                let _ = app.update_theme_editor(super::editor::EditorMessage::Cancel);
+            }
             let path = dir.join(file_stem(&theme.to_string(), view));
             // `matches_image` only writes when the file is missing.
             for old in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
