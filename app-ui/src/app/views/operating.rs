@@ -58,14 +58,14 @@ impl App {
                 button(text(kind.title()).size(12))
                     .padding([2, 10])
                     .on_press(Message::PanelToggled(*kind))
-                    .style(theme::tab_style(self.panels.is_open(*kind))),
+                    .style(theme::frame_toggle_style(self.panels.is_open(*kind))),
             );
         }
         bar = bar.push(Space::new().width(Length::Fill)).push(
             button(text("Reset layout").size(12))
                 .padding([2, 10])
                 .on_press(Message::PanelsReset)
-                .style(button::text),
+                .style(theme::frame_toggle_style(false)),
         );
         container(bar.wrap()).padding([0, 4]).width(Length::Fill).into()
     }
@@ -513,7 +513,12 @@ impl App {
                 cell_fill(spot.comment.as_deref().unwrap_or("")),
             ];
             let is_target = target_dxcc_id.is_some() && info.dxcc_id == target_dxcc_id;
-            rows = rows.push(table_row(cells, Message::SpotClicked(spot.clone()), is_target));
+            rows = rows.push(table_row(
+                &self.theme,
+                cells,
+                Message::SpotClicked(spot.clone()),
+                is_target,
+            ));
         }
 
         column![
@@ -564,6 +569,7 @@ impl App {
                 cell_fill(q.cq_zone.map(|z| z.to_string()).unwrap_or_default()),
             ];
             rows = rows.push(table_row(
+                &self.theme,
                 cells,
                 Message::QsoSelected(q.id),
                 self.editing_qso == Some(q.id),
@@ -673,7 +679,7 @@ impl App {
         };
         col = col.push(status_line(wsjtx_color, "WSJT-X", wsjtx_text));
 
-        scrollable(col).into()
+        scrollable(col.width(Length::Fill)).into()
     }
 
     // ---- CW keyer ----

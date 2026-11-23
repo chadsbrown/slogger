@@ -74,7 +74,7 @@ pub(super) fn tab_bar(current: ViewKind) -> Element<'static, Message> {
             )
             .padding([4, 12])
             .on_press(Message::ViewChanged(*v))
-            .style(theme::tab_style(*v == current)),
+            .style(theme::frame_tab_style(*v == current)),
         );
     }
     container(bar).padding([0, 4]).width(Length::Fill).into()

@@ -117,6 +117,10 @@ impl Scheme {
             band: on(self.magenta),
             mode: on(self.accent),
             select: mix(self.background, self.accent, 0.25),
+            select_text: None,
+            hover: self.surface,
+            control: self.surface,
+            edge: 1.0,
             bar: self.accent,
             bar_text: ink_on(self.accent),
             pane: self.surface,
@@ -142,10 +146,33 @@ impl Scheme {
         if let Ok(mut registry) = HUES.write() {
             registry.insert(name.clone(), hues);
         }
+        // A highlighted row that inverts (white on a navy bar, say) is
+        // drawn in a twin of the theme whose text is all one colour.
+        if let Some(ink) = hues.select_text {
+            let twin_name = format!("{name} (selected row)");
+            let twin_hues = Hues {
+                muted: ink,
+                call: ink,
+                freq: ink,
+                band: ink,
+                mode: ink,
+                ..hues
+            };
+            let twin = Scheme { text: ink, muted: ink, background: hues.select, ..*self };
+            if let (Ok(mut registry), Ok(mut twins)) = (HUES.write(), SELECTED.write()) {
+                registry.insert(twin_name.clone(), twin_hues);
+                twins.insert(name.clone(), twin.build(twin_name, twin_hues));
+            }
+        }
+        self.build(name, hues)
+    }
+
+    fn build(&self, name: String, hues: Hues) -> Theme {
         let scheme = *self;
         Theme::custom_with_fn(name, self.palette(), move |palette| {
             let mut ext = Extended::generate(palette);
-            ext.background.weak = Pair::new(scheme.surface, scheme.text);
+            // Drop-downs and scrollbar rails take the weak shade.
+            ext.background.weak = Pair::new(hues.control, scheme.text);
             ext.background.strong = Pair::new(scheme.line, scheme.text);
             ext
         })
@@ -163,6 +190,15 @@ pub(super) struct Hues {
     /// Behind a highlighted table row. The data colours above have to
     /// stay readable on it.
     pub(super) select: Color,
+    /// Set when a highlighted row inverts: every cell on it is drawn in
+    /// this one colour.
+    pub(super) select_text: Option<Color>,
+    /// Behind a row under the pointer.
+    pub(super) hover: Color,
+    /// The face of a drop-down.
+    pub(super) control: Color,
+    /// Border width around panes, tables and buttons.
+    pub(super) edge: f32,
     /// A title bar or the active tab, and the text on it.
     pub(super) bar: Color,
     pub(super) bar_text: Color,
@@ -183,6 +219,16 @@ pub(super) struct Hues {
 /// The hues of every scheme-built theme, by theme name. An iced `Theme`
 /// has no room for them, and the style functions only get the theme.
 static HUES: LazyLock<RwLock<HashMap<String, Hues>>> = LazyLock::new(Default::default);
+
+/// For each theme whose highlighted rows invert, the twin theme those
+/// rows are drawn in, by theme name.
+static SELECTED: LazyLock<RwLock<HashMap<String, Theme>>> = LazyLock::new(Default::default);
+
+/// The theme a highlighted row's cells are drawn in, if `theme` inverts
+/// them.
+fn selected_row_theme(theme: &Theme) -> Option<Theme> {
+    SELECTED.read().ok()?.get(&theme.to_string()).cloned()
+}
 
 /// The data hues that go with a theme. Themes not built from a [`Scheme`]
 /// (iced's built-ins) get hues blended from their palette.
@@ -285,11 +331,15 @@ struct Look {
     /// The bar behind a highlighted row; text, callsigns and frequencies
     /// all have to read on it.
     select: u32,
+    /// Set when that bar inverts the row: the one colour of its text.
+    select_text: Option<u32>,
     /// Title bars and the active tab, and the text on them.
     bar: u32,
     bar_text: u32,
     /// Push buttons.
     button: u32,
+    /// Border width.
+    edge: f32,
 }
 
 /// The designed themes: six families (Light, Warm, Cool, Grey, Dark,
@@ -303,108 +353,123 @@ struct Look {
 const LOOKS: &[Look] = &[
     Look {
         name: "Light Soft",
-        chrome: 0xcacaca, pane: 0xe6e6e6, field: 0xf7f7f7, surface: 0xe3e8f8, line: 0x8c8c8c,
-        text: 0x2e2e2e, muted: 0x5b5b5b, accent: 0x0000a0, call: 0x0000c0, freq: 0x005a5a,
-        green: 0x007000, amber: 0xa85000, red: 0xc00000, magenta: 0x800080, select: 0xffe600,
-        bar: 0x000080, bar_text: 0xffffff, button: 0xf4f4f4,
+        chrome: 0xdbdbdb, pane: 0xededed, field: 0xf8f8f8, surface: 0xe3e3ee, line: 0xa4a4a4,
+        text: 0x333333, muted: 0x636363, accent: 0x4747a4, call: 0x0000c0, freq: 0x005a5a,
+        green: 0x007000, amber: 0xa85000, red: 0xc00000, magenta: 0x800080, select: 0x4747a4,
+        bar: 0x4747a4, bar_text: 0xffffff, button: 0xf8f8f8,
+        select_text: Some(0xffffff), edge: 1.0,
     },
     Look {
         name: "Light Standard",
-        chrome: 0xb1b1b1, pane: 0xdcdcdc, field: 0xfcfcfc, surface: 0xe8ecfc, line: 0x696969,
-        text: 0x0d0d0d, muted: 0x484848, accent: 0x0000a0, call: 0x0000c0, freq: 0x005a5a,
-        green: 0x007000, amber: 0xa85000, red: 0xc00000, magenta: 0x800080, select: 0xffe600,
-        bar: 0x000080, bar_text: 0xffffff, button: 0xefefef,
+        chrome: 0xababab, pane: 0xd7d7d7, field: 0xfcfcfc, surface: 0xdedeed, line: 0x636363,
+        text: 0x0b0b0b, muted: 0x424242, accent: 0x000080, call: 0x0000c0, freq: 0x005a5a,
+        green: 0x007000, amber: 0xa85000, red: 0xc00000, magenta: 0x800080, select: 0x000080,
+        bar: 0x000080, bar_text: 0xffffff, button: 0xebebeb,
+        select_text: Some(0xffffff), edge: 1.0,
     },
     Look {
         name: "Light High",
-        chrome: 0x808080, pane: 0xd1d1d1, field: 0xffffff, surface: 0xeaefff, line: 0x333333,
-        text: 0x000000, muted: 0x2e2e2e, accent: 0x0000a0, call: 0x0000c0, freq: 0x005a5a,
-        green: 0x007000, amber: 0xa85000, red: 0xc00000, magenta: 0x800080, select: 0xffe600,
-        bar: 0x000080, bar_text: 0xffffff, button: 0xeaeaea,
+        chrome: 0x5d5d5d, pane: 0xbababa, field: 0xffffff, surface: 0xe0e0ea, line: 0x060606,
+        text: 0x000000, muted: 0x1b1b1b, accent: 0x000053, call: 0x0000c0, freq: 0x005a5a,
+        green: 0x007000, amber: 0xa85000, red: 0xc00000, magenta: 0x800080, select: 0x000053,
+        bar: 0x000053, bar_text: 0xffffff, button: 0xd2d2d2,
+        select_text: Some(0xffffff), edge: 2.0,
     },
     Look {
         name: "Warm Soft",
-        chrome: 0xd4c9b7, pane: 0xf0e5d2, field: 0xfcf6ed, surface: 0xe8e7ef, line: 0x958b79,
-        text: 0x322d26, muted: 0x5f5a52, accent: 0x0000a0, call: 0x0000c0, freq: 0x005a5a,
-        green: 0x007000, amber: 0xa85000, red: 0xc00000, magenta: 0x800080, select: 0xffe600,
-        bar: 0x7a1500, bar_text: 0xffffff, button: 0xf8f3eb,
+        chrome: 0xe5d9c7, pane: 0xf7ebd8, field: 0xfef8ee, surface: 0xf3e5da, line: 0xaea391,
+        text: 0x37322b, muted: 0x67635a, accent: 0x9f5747, call: 0x0000c0, freq: 0x005a5a,
+        green: 0x007000, amber: 0xa85000, red: 0xc00000, magenta: 0x800080, select: 0x9f5747,
+        bar: 0x9f5747, bar_text: 0xffffff, button: 0xfcf7ef,
+        select_text: Some(0xffffff), edge: 1.0,
     },
     Look {
         name: "Warm Standard",
-        chrome: 0xbbb09e, pane: 0xe6dbc8, field: 0xfefbf7, surface: 0xe9ecf8, line: 0x726757,
-        text: 0x100d07, muted: 0x4c473f, accent: 0x0000a0, call: 0x0000c0, freq: 0x005a5a,
-        green: 0x007000, amber: 0xa85000, red: 0xc00000, magenta: 0x800080, select: 0xffe600,
-        bar: 0x7a1500, bar_text: 0xffffff, button: 0xf4efe6,
+        chrome: 0xb4a997, pane: 0xe1d6c3, field: 0xfefbf7, surface: 0xeedfd9, line: 0x6c6251,
+        text: 0x0e0b05, muted: 0x46423a, accent: 0x7a1500, call: 0x0000c0, freq: 0x005a5a,
+        green: 0x007000, amber: 0xa85000, red: 0xc00000, magenta: 0x800080, select: 0x7a1500,
+        bar: 0x7a1500, bar_text: 0xffffff, button: 0xf0eae1,
+        select_text: Some(0xffffff), edge: 1.0,
     },
     Look {
         name: "Warm High",
-        chrome: 0x897f6e, pane: 0xdbcfbd, field: 0xffffff, surface: 0xeaefff, line: 0x3a3122,
-        text: 0x000000, muted: 0x322d26, accent: 0x0000a0, call: 0x0000c0, freq: 0x005a5a,
-        green: 0x007000, amber: 0xa85000, red: 0xc00000, magenta: 0x800080, select: 0xffe600,
-        bar: 0x7a1500, bar_text: 0xffffff, button: 0xefe9e1,
+        chrome: 0x665c4c, pane: 0xc4b9a7, field: 0xffffff, surface: 0xeae2e0, line: 0x0a0500,
+        text: 0x000000, muted: 0x1e1a13, accent: 0x4f0e00, call: 0x0000c0, freq: 0x005a5a,
+        green: 0x007000, amber: 0xa85000, red: 0xc00000, magenta: 0x800080, select: 0x4f0e00,
+        bar: 0x4f0e00, bar_text: 0xffffff, button: 0xd9d2c6,
+        select_text: Some(0xffffff), edge: 2.0,
     },
     Look {
         name: "Cool Soft",
-        chrome: 0xbfccd8, pane: 0xdbe8f4, field: 0xf1f8fe, surface: 0xdee9fe, line: 0x818e99,
-        text: 0x292e33, muted: 0x565c61, accent: 0x0000a0, call: 0x0000c0, freq: 0x005a5a,
-        green: 0x007000, amber: 0xa85000, red: 0xc00000, magenta: 0x800080, select: 0xffe600,
-        bar: 0x004890, bar_text: 0xffffff, button: 0xeff5fa,
+        chrome: 0xcfdde9, pane: 0xe1effb, field: 0xf5f9fd, surface: 0xe0eaf4, line: 0x9aa6b2,
+        text: 0x2e3438, muted: 0x5e6469, accent: 0x477baf, call: 0x0000c0, freq: 0x005a5a,
+        green: 0x007000, amber: 0xa85000, red: 0xc00000, magenta: 0x800080, select: 0x477baf,
+        bar: 0x477baf, bar_text: 0x000000, button: 0xf3f9fd,
+        select_text: Some(0x000000), edge: 1.0,
     },
     Look {
         name: "Cool Standard",
-        chrome: 0xa6b3be, pane: 0xd1deea, field: 0xfafcfe, surface: 0xe6ecfe, line: 0x5f6b75,
-        text: 0x090e12, muted: 0x43484d, accent: 0x0000a0, call: 0x0000c0, freq: 0x005a5a,
-        green: 0x007000, amber: 0xa85000, red: 0xc00000, magenta: 0x800080, select: 0xffe600,
-        bar: 0x004890, bar_text: 0xffffff, button: 0xeaf0f6,
+        chrome: 0xa0adb8, pane: 0xccd9e5, field: 0xfafcfe, surface: 0xdce6f1, line: 0x59656f,
+        text: 0x080c10, muted: 0x3e4348, accent: 0x004890, call: 0x0000c0, freq: 0x005a5a,
+        green: 0x007000, amber: 0xa85000, red: 0xc00000, magenta: 0x800080, select: 0x004890,
+        bar: 0x004890, bar_text: 0xffffff, button: 0xe6ecf2,
+        select_text: Some(0xffffff), edge: 1.0,
     },
     Look {
         name: "Cool High",
-        chrome: 0x76828d, pane: 0xc6d3df, field: 0xffffff, surface: 0xeaefff, line: 0x2a343e,
-        text: 0x000000, muted: 0x292e33, accent: 0x0000a0, call: 0x0000c0, freq: 0x005a5a,
-        green: 0x007000, amber: 0xa85000, red: 0xc00000, magenta: 0x800080, select: 0xffe600,
-        bar: 0x004890, bar_text: 0xffffff, button: 0xe5ebf1,
+        chrome: 0x545f69, pane: 0xafbcc8, field: 0xffffff, surface: 0xe0e6ec, line: 0x01060d,
+        text: 0x000000, muted: 0x161b1f, accent: 0x002f5e, call: 0x0000c0, freq: 0x005a5a,
+        green: 0x007000, amber: 0xa85000, red: 0xc00000, magenta: 0x800080, select: 0x002f5e,
+        bar: 0x002f5e, bar_text: 0xffffff, button: 0xcbd3db,
+        select_text: Some(0xffffff), edge: 2.0,
     },
     Look {
         name: "Grey Soft",
-        chrome: 0x808080, pane: 0xa1a1a1, field: 0xc1c1c1, surface: 0xb2b7c7, line: 0x585858,
-        text: 0x090909, muted: 0x353535, accent: 0x0000a0, call: 0x0000c0, freq: 0x005a5a,
-        green: 0x007000, amber: 0xa85000, red: 0xc00000, magenta: 0x800080, select: 0xffe600,
-        bar: 0x000080, bar_text: 0xffffff, button: 0xd5d5d5,
+        chrome: 0x8c8c8c, pane: 0xa8a8a8, field: 0xc7c7c7, surface: 0xb8b8c3, line: 0x636363,
+        text: 0x090909, muted: 0x333333, accent: 0x4747a4, call: 0x0000c0, freq: 0x004848,
+        green: 0x006400, amber: 0x8c4000, red: 0xc00000, magenta: 0x800080, select: 0x4747a4,
+        bar: 0x4747a4, bar_text: 0xffffff, button: 0xdcdcdc,
+        select_text: Some(0xffffff), edge: 1.0,
     },
     Look {
         name: "Grey Standard",
-        chrome: 0x696969, pane: 0x9b9b9b, field: 0xd7d7d7, surface: 0xc6cbdb, line: 0x424242,
-        text: 0x000000, muted: 0x292929, accent: 0x0000a0, call: 0x0000c0, freq: 0x005a5a,
-        green: 0x007000, amber: 0xa85000, red: 0xc00000, magenta: 0x800080, select: 0xffe600,
-        bar: 0x000080, bar_text: 0xffffff, button: 0xd2d2d2,
+        chrome: 0x636363, pane: 0x989898, field: 0xd7d7d7, surface: 0xbdbdcd, line: 0x3d3d3d,
+        text: 0x000000, muted: 0x242424, accent: 0x000080, call: 0x0000c0, freq: 0x004848,
+        green: 0x006400, amber: 0x8c4000, red: 0xc00000, magenta: 0x800080, select: 0x000080,
+        bar: 0x000080, bar_text: 0xffffff, button: 0xcccccc,
+        select_text: Some(0xffffff), edge: 1.0,
     },
     Look {
         name: "Grey High",
-        chrome: 0x484848, pane: 0x959595, field: 0xf2f2f2, surface: 0xdfe3f3, line: 0x1f1f1f,
-        text: 0x000000, muted: 0x1b1b1b, accent: 0x0000a0, call: 0x0000c0, freq: 0x005a5a,
-        green: 0x007000, amber: 0xa85000, red: 0xc00000, magenta: 0x800080, select: 0xffe600,
-        bar: 0x000080, bar_text: 0xffffff, button: 0xcfcfcf,
+        chrome: 0x383838, pane: 0x868686, field: 0xf5f5f5, surface: 0xd8d8e2, line: 0x030303,
+        text: 0x000000, muted: 0x121212, accent: 0x000053, call: 0x0000c0, freq: 0x004848,
+        green: 0x006400, amber: 0x8c4000, red: 0xc00000, magenta: 0x800080, select: 0x000053,
+        bar: 0x000053, bar_text: 0xffffff, button: 0xb0b0b0,
+        select_text: Some(0xffffff), edge: 2.0,
     },
     Look {
         name: "Dark Soft",
-        chrome: 0x343539, pane: 0x535559, field: 0x3f4144, surface: 0x505255, line: 0x7e8084,
-        text: 0xedeef0, muted: 0xc9cacc, accent: 0x2f7cff, call: 0xffe000, freq: 0x40e0e0,
-        green: 0x20d040, amber: 0xff9500, red: 0xff5050, magenta: 0xff60ff, select: 0x0048b8,
-        bar: 0x002e80, bar_text: 0xffffff, button: 0x616366,
+        chrome: 0x3e4043, pane: 0x595b5e, field: 0x44464a, surface: 0x55575a, line: 0x787a7e,
+        text: 0xeaebed, muted: 0xccced0, accent: 0x2f7cff, call: 0xffe000, freq: 0x40e0e0,
+        green: 0x20d040, amber: 0xff9500, red: 0xff6a6a, magenta: 0xff60ff, select: 0x0048b8,
+        bar: 0x002e80, bar_text: 0xffffff, button: 0x66686b,
+        select_text: None, edge: 1.0,
     },
     Look {
         name: "Dark Standard",
-        chrome: 0x222427, pane: 0x4e5053, field: 0x323437, surface: 0x444649, line: 0x84868a,
-        text: 0xf4f5f7, muted: 0xc9cacc, accent: 0x2f7cff, call: 0xffe000, freq: 0x40e0e0,
-        green: 0x20d040, amber: 0xff9500, red: 0xff5050, magenta: 0xff60ff, select: 0x0048b8,
-        bar: 0x002e80, bar_text: 0xffffff, button: 0x5c5e61,
+        chrome: 0x1e1f22, pane: 0x4b4d50, field: 0x2f3033, surface: 0x424345, line: 0x8a8c90,
+        text: 0xf4f5f7, muted: 0xccced0, accent: 0x2f7cff, call: 0xffe000, freq: 0x40e0e0,
+        green: 0x20d040, amber: 0xff9500, red: 0xff6a6a, magenta: 0xff60ff, select: 0x0048b8,
+        bar: 0x002e80, bar_text: 0xffffff, button: 0x595b5e,
+        select_text: None, edge: 1.0,
     },
     Look {
         name: "Dark High",
-        chrome: 0x0a0b0e, pane: 0x4b4d50, field: 0x1b1d20, surface: 0x303134, line: 0xa2a5a8,
-        text: 0xffffff, muted: 0xd6d7d9, accent: 0x2f7cff, call: 0xffe000, freq: 0x40e0e0,
-        green: 0x20d040, amber: 0xff9500, red: 0xff5050, magenta: 0xff60ff, select: 0x0048b8,
-        bar: 0x002e80, bar_text: 0xffffff, button: 0x595b5e,
+        chrome: 0x0a0b0e, pane: 0x434548, field: 0x17181b, surface: 0x2c2d30, line: 0xcfd1d5,
+        text: 0xffffff, muted: 0xdddee0, accent: 0x2f7cff, call: 0xffe000, freq: 0x40e0e0,
+        green: 0x20d040, amber: 0xff9500, red: 0xff6a6a, magenta: 0xff60ff, select: 0x0048b8,
+        bar: 0x001a58, bar_text: 0xffffff, button: 0x525457,
+        select_text: None, edge: 2.0,
     },
     Look {
         name: "Blue Soft",
@@ -412,6 +477,7 @@ const LOOKS: &[Look] = &[
         text: 0xe7effd, muted: 0xc2cbdb, accent: 0x00a8a8, call: 0xffff55, freq: 0x55ffff,
         green: 0x55ff55, amber: 0xffaa00, red: 0xff6060, magenta: 0xff55ff, select: 0xa800a8,
         bar: 0x00a8a8, bar_text: 0x000000, button: 0x3e5892,
+        select_text: None, edge: 1.0,
     },
     Look {
         name: "Blue Standard",
@@ -419,6 +485,7 @@ const LOOKS: &[Look] = &[
         text: 0xffffff, muted: 0xc9d1e2, accent: 0x00a8a8, call: 0xffff55, freq: 0x55ffff,
         green: 0x55ff55, amber: 0xffaa00, red: 0xff6060, magenta: 0xff55ff, select: 0xa800a8,
         bar: 0x00a8a8, bar_text: 0x000000, button: 0x1a3ea9,
+        select_text: None, edge: 1.0,
     },
     Look {
         name: "Blue High",
@@ -426,6 +493,7 @@ const LOOKS: &[Look] = &[
         text: 0xffffff, muted: 0xd6deef, accent: 0x00a8a8, call: 0xffff55, freq: 0x55ffff,
         green: 0x55ff55, amber: 0xffaa00, red: 0xff6060, magenta: 0xff55ff, select: 0xa800a8,
         bar: 0x00a8a8, bar_text: 0x000000, button: 0x143ac6,
+        select_text: None, edge: 2.0,
     },
     // A dark shack: near-black, with everything dimmed.
     Look {
@@ -434,7 +502,7 @@ const LOOKS: &[Look] = &[
         text: 0xa8a8a8, muted: 0x808080, accent: 0x3a68b8,
         call: 0xc8a000, freq: 0x00a0a8,
         green: 0x18a030, amber: 0xc07000, red: 0xd03030, magenta: 0xa050a0,
-        select: 0x14284c, bar: 0x2c3a50, bar_text: 0xa8a8a8, button: 0x202020,
+        select: 0x14284c, select_text: None, bar: 0x2c3a50, bar_text: 0xa8a8a8, button: 0x202020, edge: 1.0,
     },
     // Red only, to keep the eyes adapted to the dark.
     Look {
@@ -443,7 +511,7 @@ const LOOKS: &[Look] = &[
         text: 0xff5a4a, muted: 0xec3434, accent: 0xc00000,
         call: 0xff8a3c, freq: 0xff5a4a,
         green: 0xff9a00, amber: 0xff6a00, red: 0xff0000, magenta: 0xd03060,
-        select: 0x480000, bar: 0x780000, bar_text: 0xffc0b0, button: 0x500000,
+        select: 0x480000, select_text: None, bar: 0x780000, bar_text: 0xffc0b0, button: 0x500000, edge: 1.0,
     },
 ];
 
@@ -465,6 +533,10 @@ impl Look {
             band: rgb(self.text),
             mode: rgb(self.text),
             select: rgb(self.select),
+            select_text: self.select_text.map(rgb),
+            hover: rgb(self.surface),
+            control: rgb(self.button),
+            edge: self.edge,
             bar: rgb(self.bar),
             bar_text: rgb(self.bar_text),
             chrome: rgb(self.chrome),
@@ -669,8 +741,10 @@ pub(super) fn all_themes() -> Vec<ThemeEntry> {
 
 fn themes_from(custom: Option<&Path>) -> Vec<ThemeEntry> {
     let entry = |source| move |theme| ThemeEntry { source, theme };
-    let mut entries: Vec<ThemeEntry> = std::iter::once(app_theme())
-        .chain(designed())
+    // Families first, three strengths to a picker row; the original
+    // theme closes the last row.
+    let mut entries: Vec<ThemeEntry> = designed()
+        .chain(std::iter::once(app_theme()))
         .map(entry(ThemeSource::Slogger))
         .collect();
     let bundled: Vec<ThemeEntry> = schemes(BUNDLED)
@@ -975,22 +1049,31 @@ pub(super) fn table_header<'a>(cells: Row<'a, Message>) -> Element<'a, Message> 
 /// A clickable table row. `highlighted` rows get a persistent background
 /// (the QSO being edited, a spot matching the award target).
 pub(super) fn table_row<'a>(
+    theme: &Theme,
     cells: Row<'a, Message>,
     on_press: Message,
     highlighted: bool,
 ) -> Element<'a, Message> {
-    button(cells.spacing(CELL_SPACING))
+    let cells = cells.spacing(CELL_SPACING);
+    let cells: Element<'a, Message> = match selected_row_theme(theme) {
+        // Unstyled text takes its colour from above the row, so the twin
+        // has to supply its own.
+        Some(twin) if highlighted => iced::widget::themer(Some(twin), cells)
+            .text_color(|twin: &Theme| twin.palette().text)
+            .into(),
+        _ => cells.into(),
+    };
+    button(cells)
         .padding(ROW_PADDING)
         .width(Length::Fill)
         .on_press(on_press)
         .style(move |theme: &Theme, status| {
-            let ext = theme.extended_palette();
             let background = if highlighted {
                 Some(hues(theme).select.into())
             } else {
                 match status {
                     button::Status::Hovered | button::Status::Pressed => {
-                        Some(ext.background.weak.color.into())
+                        Some(hues(theme).hover.into())
                     }
                     _ => None,
                 }
@@ -1027,7 +1110,7 @@ pub(super) fn pane_content_style(theme: &Theme) -> container::Style {
         background: Some(hues(theme).pane.into()),
         border: Border {
             color: ext.background.strong.color,
-            width: 1.0,
+            width: hues(theme).edge,
             radius: 4.0.into(),
         },
         ..container::Style::default()
@@ -1057,7 +1140,7 @@ pub(super) fn panel_style(theme: &Theme) -> container::Style {
         background: Some(hues(theme).pane.into()),
         border: Border {
             color: ext.background.strong.color,
-            width: 1.0,
+            width: hues(theme).edge,
             radius: 4.0.into(),
         },
         shadow: iced::Shadow {
@@ -1108,7 +1191,7 @@ pub(super) fn field_style(theme: &Theme) -> container::Style {
         text_color: Some(theme.palette().text),
         border: Border {
             color: ext.background.strong.color,
-            width: 1.0,
+            width: hues(theme).edge,
             radius: 2.0.into(),
         },
         ..container::Style::default()
@@ -1200,14 +1283,14 @@ pub(super) fn push_button(theme: &Theme, status: button::Status) -> button::Styl
         button::Status::Active => (hues.button, hues.button_text),
         button::Status::Hovered => (mix(hues.button, toward, 0.12), hues.button_text),
         button::Status::Pressed => (mix(hues.button, toward, 0.22), hues.button_text),
-        button::Status::Disabled => (hues.button, mix(hues.button, hues.button_text, 0.4)),
+        button::Status::Disabled => (hues.button, mix(hues.button, hues.button_text, 0.55)),
     };
     button::Style {
         background: Some(face.into()),
         text_color,
         border: Border {
             color: mix(edge, toward, 0.25),
-            width: 1.0,
+            width: hues.edge,
             radius: 3.0.into(),
         },
         ..button::Style::default()
@@ -1244,30 +1327,81 @@ pub(super) fn bar_button(theme: &Theme, status: button::Status) -> button::Style
     }
 }
 
-/// A tab in the top view switcher.
+/// A tab or toggle sitting on a pane: solid when active, plain text
+/// otherwise.
 pub(super) fn tab_style(active: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
     move |theme: &Theme, status| {
-        let ext = theme.extended_palette();
         let hues = hues(theme);
         let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+        let text = theme.palette().text;
         button::Style {
             background: if active {
                 Some(hues.bar.into())
             } else if hovered {
-                Some(ext.background.weak.color.into())
+                Some(hues.button.into())
+            } else {
+                None
+            },
+            text_color: if active {
+                hues.bar_text
+            } else if hovered {
+                hues.button_text
+            } else {
+                Color { a: 0.8, ..text }
+            },
+            border: Border {
+                radius: 4.0.into(),
+                ..Border::default()
+            },
+            ..button::Style::default()
+        }
+    }
+}
+
+/// A view tab in the top bar, which sits on the window frame.
+pub(super) fn frame_tab_style(active: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
+    move |theme: &Theme, status| {
+        let hues = hues(theme);
+        let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+        let ink = ink_toward(theme.palette().text, hues.chrome);
+        button::Style {
+            background: if active {
+                Some(hues.bar.into())
+            } else if hovered {
+                Some(Color { a: 0.15, ..ink }.into())
             } else {
                 None
             },
             text_color: if active {
                 hues.bar_text
             } else {
-                // Tabs sit on the window frame.
-                let ink = ink_toward(theme.palette().text, hues.chrome);
-                Color { a: if hovered { 1.0 } else { 0.75 }, ..ink }
+                Color { a: if hovered { 1.0 } else { 0.8 }, ..ink }
             },
             border: Border {
                 radius: 4.0.into(),
                 ..Border::default()
+            },
+            ..button::Style::default()
+        }
+    }
+}
+
+/// A toggle on the window frame for something that is open or shut (a
+/// panel): open is a raised button, shut is plain text.
+pub(super) fn frame_toggle_style(open: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
+    move |theme: &Theme, status| {
+        if open {
+            return push_button(theme, status);
+        }
+        let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+        let ink = ink_toward(theme.palette().text, hues(theme).chrome);
+        button::Style {
+            background: hovered.then(|| Color { a: 0.15, ..ink }.into()),
+            text_color: Color { a: if hovered { 1.0 } else { 0.7 }, ..ink },
+            border: Border {
+                color: Color { a: 0.35, ..ink },
+                width: 1.0,
+                radius: 3.0.into(),
             },
             ..button::Style::default()
         }
@@ -1438,7 +1572,8 @@ palette:
             reads("muted text on a pane", h.muted, h.pane, 4.0);
             reads("bar on its pane", h.bar, h.pane, 1.3);
             for (what, ink) in [("text", text), ("call", h.call), ("freq", h.freq)] {
-                reads(&format!("{what} on a selected row"), ink, h.select, 4.5);
+                let on_bar = h.select_text.unwrap_or(ink);
+                reads(&format!("{what} on a selected row"), on_bar, h.select, 4.5);
                 reads(&format!("{what} on a hovered row"), ink, rgb(look.surface), 4.0);
             }
             for (what, fill) in [("good", h.good), ("warn", h.warn), ("bad", h.bad)] {

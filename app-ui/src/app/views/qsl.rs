@@ -564,7 +564,12 @@ fn view_confirmations_pane(app: &App) -> Element<'_, Message> {
             .style(theme::mode),
             cell_fill(r.entity.as_str()),
         ];
-        list = list.push(table_row(cells, Message::ConfirmationClicked(c.qso_id), false));
+        list = list.push(table_row(
+            &app.theme,
+            cells,
+            Message::ConfirmationClicked(c.qso_id),
+            false,
+        ));
     }
 
     out.push(label(confirmations_heading(rows.len(), RECENT_CONFIRMATIONS_LIMIT)))
