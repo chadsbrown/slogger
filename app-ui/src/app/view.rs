@@ -41,7 +41,12 @@ impl App {
         };
 
         let body = column![tabs, view_body, self.status_bar()].spacing(6);
-        let main: Element<'_, Message> = container(body).padding(8).into();
+        let main: Element<'_, Message> = container(body)
+            .padding(8)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .style(theme::canvas_style)
+            .into();
         match &self.modal {
             Some(modal) => super::modals::overlay(main, self, modal),
             None => main,

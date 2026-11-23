@@ -18,6 +18,11 @@ use super::message::Message;
 
 /// Font for anything columnar or numeric: callsigns, frequencies, tables.
 pub(super) const MONO: Font = Font::MONOSPACE;
+/// Callsigns and frequencies: the things an operator hunts for.
+pub(super) const MONO_BOLD: Font = Font {
+    weight: iced::font::Weight::Bold,
+    ..Font::MONOSPACE
+};
 
 /// Body size for table rows and dense readouts.
 pub(super) const ROW_TEXT: f32 = 13.0;
@@ -112,10 +117,14 @@ impl Scheme {
             band: on(self.magenta),
             mode: on(self.accent),
             select: mix(self.background, self.accent, 0.25),
-            bar: self.surface,
-            bar_text: mix(self.surface, self.text, 0.7),
-            tab: self.line,
-            tab_text: self.text,
+            bar: self.accent,
+            bar_text: ink_on(self.accent),
+            chrome: mix(self.background, Color::BLACK, if dark(self.background) { 0.3 } else { 0.14 }),
+            button: self.line,
+            button_text: self.text,
+            good: self.green,
+            warn: self.yellow,
+            bad: self.red,
         }
     }
 
@@ -153,12 +162,19 @@ pub(super) struct Hues {
     /// Behind a highlighted table row. The data colours above have to
     /// stay readable on it.
     pub(super) select: Color,
-    /// A pane or panel title bar, and the text on it.
+    /// A title bar or the active tab, and the text on it.
     pub(super) bar: Color,
     pub(super) bar_text: Color,
-    /// The active tab, and the text on it.
-    pub(super) tab: Color,
-    pub(super) tab_text: Color,
+    /// The window frame: what shows around and between the panes that
+    /// hold data, which sit on the theme's background.
+    pub(super) chrome: Color,
+    /// A push button's face, and the text on it.
+    pub(super) button: Color,
+    pub(super) button_text: Color,
+    /// Fills for status cells: something wanted, a caution, a problem.
+    pub(super) good: Color,
+    pub(super) warn: Color,
+    pub(super) bad: Color,
 }
 
 /// The hues of every scheme-built theme, by theme name. An iced `Theme`
@@ -201,10 +217,24 @@ fn contrast(a: Color, b: Color) -> f32 {
     (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
 }
 
+/// Whether light text belongs on `background`.
+fn dark(background: Color) -> bool {
+    luminance(background) < 0.18
+}
+
+/// Black or white, whichever reads better on `on`.
+pub(super) fn ink_on(on: Color) -> Color {
+    if contrast(Color::BLACK, on) >= contrast(Color::WHITE, on) {
+        Color::BLACK
+    } else {
+        Color::WHITE
+    }
+}
+
 /// `color`, lightened on a dark background (or darkened on a light one)
 /// just far enough to reach the `min` contrast ratio against it.
 fn legible(color: Color, background: Color, min: f32) -> Color {
-    let toward = if luminance(background) < 0.18 { Color::WHITE } else { Color::BLACK };
+    let toward = if dark(background) { Color::WHITE } else { Color::BLACK };
     let mut out = color;
     for step in 1..=20 {
         if contrast(out, background) >= min {
@@ -226,121 +256,131 @@ pub(super) fn app_theme() -> Theme {
     SLOGGER.theme("slogger")
 }
 
-/// Themes designed for slogger, as
-/// `(name, [background, surface, line, bar])`, dark-side first. Most sit
-/// on a background in the middle of the range (neither near-black nor
-/// glaring white), each a differently tinted grey; Classic Blue, Console,
-/// Classic Grey and Paper are the looks of older logging software. They
-/// share one set of plain colours per side (see [`Inks`]) and differ in
-/// the tone they sit on and in `bar`, the solid colour of their title
-/// bars and active tabs.
-const DESIGNED: &[(&str, [u32; 4])] = &[
-    ("Classic Blue", [0x0f2a70, 0x1a3a8a, 0x3558b0, 0x00a8a8]),
-    ("Slate", [0x2f343d, 0x3a404a, 0x525a68, 0x0050c8]),
-    ("Graphite", [0x323234, 0x3e3e41, 0x58585c, 0xd06000]),
-    ("Console", [0x141414, 0x222222, 0x444444, 0x00a000]),
-    ("Pine", [0x2c3832, 0x37443d, 0x4d5e55, 0x008850]),
-    ("Umber", [0x3a322d, 0x463d37, 0x60544c, 0xb03000]),
-    ("Dusk", [0x33323f, 0x3f3e4d, 0x59576b, 0x6a28d0]),
-    ("Harbor", [0x293a47, 0x344654, 0x4a6072, 0x0080b0]),
-    ("Classic Grey", [0xc0c0c0, 0xb4b4b4, 0x808080, 0x000080]),
-    ("Paper", [0xf2f1ec, 0xe6e4dd, 0xbfbcb2, 0x1a1a1a]),
-    ("Fog", [0xcdd2d8, 0xc0c6cd, 0xa3abb5, 0x004890]),
-    ("Stone", [0xd2cfc8, 0xc5c2ba, 0xa8a49b, 0x5a3000]),
-    ("Parchment", [0xddd3bd, 0xd0c5ad, 0xb3a78c, 0x800000]),
-    ("Sage", [0xc9d1c4, 0xbcc5b6, 0x9eaa97, 0x005030]),
-];
-
-/// The colours the designed themes draw with: the pure, traditional ones
-/// of a colour terminal, not softened tints of them.
-struct Inks {
-    muted: u32,
+/// A theme designed for slogger, with every colour chosen by hand.
+struct Look {
+    name: &'static str,
+    /// The window frame around the panes.
+    chrome: u32,
+    /// Where data sits: tables, panes, entry fields.
+    field: u32,
+    /// A hovered row.
+    surface: u32,
+    /// Borders.
+    line: u32,
     text: u32,
-    /// Buttons and highlights: blue.
+    muted: u32,
+    /// Primary buttons and links.
     accent: u32,
+    call: u32,
+    freq: u32,
     green: u32,
-    /// Warnings: amber.
     amber: u32,
     red: u32,
-    /// Callsigns.
-    call: u32,
-    /// Frequencies.
-    freq: u32,
     magenta: u32,
-    /// The bar behind a highlighted row; every ink above reads on it.
+    /// The bar behind a highlighted row; text, callsigns and frequencies
+    /// all have to read on it.
     select: u32,
+    /// Title bars and the active tab, and the text on them.
+    bar: u32,
+    bar_text: u32,
+    /// Push buttons.
+    button: u32,
 }
 
-/// For the dark-side themes: white text, yellow callsigns, cyan
-/// frequencies.
-const DARK_INKS: Inks = Inks {
-    muted: 0xc3c8cf,
-    text: 0xffffff,
-    accent: 0x1e6fff,
-    green: 0x00d700,
-    amber: 0xff9500,
-    red: 0xff2020,
-    call: 0xffff00,
-    freq: 0x00ffff,
-    magenta: 0xff00ff,
-    select: 0x0050c8,
-};
+/// The designed themes, one per lighting condition from brightest room to
+/// darkest, then the look of a DOS logger. Colour is used the way
+/// traditional logging programs use it: data on its own ground inside a
+/// differently toned frame, solid bars and status cells, and plain text
+/// for everything that is not a callsign, a frequency or a status.
+const LOOKS: &[Look] = &[
+    // Sun on the screen: white everywhere, black text, black bars.
+    Look {
+        name: "Daylight",
+        chrome: 0xe6e6e6, field: 0xffffff, surface: 0xeeeeee, line: 0x707070,
+        text: 0x000000, muted: 0x484848, accent: 0x0000c0,
+        call: 0x0000c0, freq: 0x005a5a,
+        green: 0x008000, amber: 0xb05800, red: 0xc80000, magenta: 0x800080,
+        select: 0xffe600, bar: 0x000000, bar_text: 0xffffff, button: 0xd6d6d6,
+    },
+    // A lit room: grey window chrome around white grids.
+    Look {
+        name: "Office",
+        chrome: 0xc0c0c0, field: 0xffffff, surface: 0xe8e8e8, line: 0x808080,
+        text: 0x000000, muted: 0x505050, accent: 0x000080,
+        call: 0x0000c0, freq: 0x005a5a,
+        green: 0x008000, amber: 0xb05800, red: 0xc00000, magenta: 0x800080,
+        select: 0xffe600, bar: 0x000080, bar_text: 0xffffff, button: 0xd4d0c8,
+    },
+    // Lamp light: mid-dark greys, bright text.
+    Look {
+        name: "Evening",
+        chrome: 0x24262a, field: 0x34373d, surface: 0x41454c, line: 0x5e646e,
+        text: 0xf2f2f2, muted: 0xb4b9c0, accent: 0x2f7cff,
+        call: 0xffe000, freq: 0x40e0e0,
+        green: 0x20d040, amber: 0xff9500, red: 0xff4040, magenta: 0xff60ff,
+        select: 0x0048b8, bar: 0x0050c8, bar_text: 0xffffff, button: 0x4c515a,
+    },
+    // A dark shack: near-black, with everything dimmed.
+    Look {
+        name: "Night",
+        chrome: 0x000000, field: 0x0c0c0c, surface: 0x181818, line: 0x303030,
+        text: 0xa8a8a8, muted: 0x808080, accent: 0x3a68b8,
+        call: 0xc8a000, freq: 0x00a0a8,
+        green: 0x18a030, amber: 0xc07000, red: 0xd03030, magenta: 0xa050a0,
+        select: 0x14284c, bar: 0x283446, bar_text: 0xa8a8a8, button: 0x202020,
+    },
+    // Red only, to keep the eyes adapted to the dark.
+    Look {
+        name: "Night Red",
+        chrome: 0x000000, field: 0x080000, surface: 0x180000, line: 0x500000,
+        text: 0xff5a4a, muted: 0xe02a2a, accent: 0xc00000,
+        call: 0xff8a3c, freq: 0xff5a4a,
+        green: 0xff9a00, amber: 0xff6a00, red: 0xff0000, magenta: 0xd03060,
+        select: 0x400000, bar: 0x700000, bar_text: 0xffc0b0, button: 0x2a0000,
+    },
+    // A DOS contest logger: blue ground, yellow calls, cyan bars.
+    Look {
+        name: "Classic Blue",
+        chrome: 0x000060, field: 0x0000a8, surface: 0x1818c0, line: 0x5858e0,
+        text: 0xffffff, muted: 0xb8b8c8, accent: 0x00a8a8,
+        call: 0xffff55, freq: 0x55ffff,
+        green: 0x55ff55, amber: 0xffaa00, red: 0xff5555, magenta: 0xff55ff,
+        select: 0x000000, bar: 0x00a8a8, bar_text: 0x000000, button: 0x2828c8,
+    },
+];
 
-/// For the light-side themes: black text, navy callsigns, teal
-/// frequencies.
-const LIGHT_INKS: Inks = Inks {
-    muted: 0x3c4048,
-    text: 0x000000,
-    accent: 0x0000a8,
-    green: 0x006400,
-    amber: 0x8a4b00,
-    red: 0xc00000,
-    call: 0x0000c0,
-    freq: 0x005050,
-    magenta: 0x800080,
-    select: 0xffe600,
-};
+impl Look {
+    fn scheme(&self) -> Scheme {
+        Scheme::from_hex([
+            self.field, self.surface, self.line, self.muted, self.text, self.accent,
+            self.green, self.amber, self.red, self.freq, self.magenta, self.call,
+        ])
+    }
 
-fn inks_for(background: u32) -> Inks {
-    if luminance(rgb(background)) < 0.18 { DARK_INKS } else { LIGHT_INKS }
-}
-
-fn designed_scheme([background, surface, line, _bar]: [u32; 4]) -> Scheme {
-    let inks = inks_for(background);
-    Scheme::from_hex([
-        background, surface, line, inks.muted, inks.text, inks.accent,
-        inks.green, inks.amber, inks.red, inks.freq, inks.magenta, inks.call,
-    ])
-}
-
-/// Black or white, whichever reads better on `on`.
-fn ink_on(on: Color) -> Color {
-    if contrast(Color::BLACK, on) >= contrast(Color::WHITE, on) {
-        Color::BLACK
-    } else {
-        Color::WHITE
+    /// The hues exactly as chosen: nothing is nudged, and bands and modes
+    /// stay in the text colour.
+    fn hues(&self) -> Hues {
+        Hues {
+            muted: rgb(self.muted),
+            call: rgb(self.call),
+            freq: rgb(self.freq),
+            band: rgb(self.text),
+            mode: rgb(self.text),
+            select: rgb(self.select),
+            bar: rgb(self.bar),
+            bar_text: rgb(self.bar_text),
+            chrome: rgb(self.chrome),
+            button: rgb(self.button),
+            button_text: rgb(self.text),
+            good: rgb(self.green),
+            warn: rgb(self.amber),
+            bad: rgb(self.red),
+        }
     }
 }
 
-/// The designed themes keep text colour to callsigns, frequencies and
-/// status (bands and modes stay in the text colour) and fill title bars,
-/// active tabs and highlighted rows with solid colour, not a wash of it.
 fn designed() -> impl Iterator<Item = Theme> {
-    DESIGNED.iter().map(|&(name, tones)| {
-        let scheme = designed_scheme(tones);
-        let bar = rgb(tones[3]);
-        let hues = Hues {
-            band: scheme.text,
-            mode: scheme.text,
-            select: rgb(inks_for(tones[0]).select),
-            bar,
-            bar_text: ink_on(bar),
-            tab: bar,
-            tab_text: ink_on(bar),
-            ..scheme.hues()
-        };
-        scheme.theme_with(name, hues)
-    })
+    LOOKS.iter().map(|look| look.scheme().theme_with(look.name, look.hues()))
 }
 
 /// Schemes collected from elsewhere, in alphabetical order: the themes
@@ -884,6 +924,7 @@ pub(super) fn table_line<'a>(cells: Row<'a, Message>) -> Element<'a, Message> {
 pub(super) fn pane_content_style(theme: &Theme) -> container::Style {
     let ext = theme.extended_palette();
     container::Style {
+        text_color: Some(theme.palette().text),
         background: Some(ext.background.base.color.into()),
         border: Border {
             color: ext.background.strong.color,
@@ -913,6 +954,7 @@ pub(super) fn title_bar_style(theme: &Theme) -> container::Style {
 pub(super) fn panel_style(theme: &Theme) -> container::Style {
     let ext = theme.extended_palette();
     container::Style {
+        text_color: Some(theme.palette().text),
         background: Some(ext.background.base.color.into()),
         border: Border {
             color: ext.background.strong.color,
@@ -928,19 +970,13 @@ pub(super) fn panel_style(theme: &Theme) -> container::Style {
     }
 }
 
-/// The canvas the floating panels sit on: slightly darker than a panel.
+/// The window frame, and the canvas the floating panels sit on: a tone
+/// of its own, so the panes holding data stand out from it.
 pub(super) fn canvas_style(theme: &Theme) -> container::Style {
-    let base = theme.extended_palette().background.base.color;
+    let hues = hues(theme);
     container::Style {
-        background: Some(
-            Color {
-                r: base.r * 0.75,
-                g: base.g * 0.75,
-                b: base.b * 0.75,
-                a: 1.0,
-            }
-            .into(),
-        ),
+        background: Some(hues.chrome.into()),
+        text_color: Some(ink_toward(theme.palette().text, hues.chrome)),
         border: Border {
             radius: 4.0.into(),
             ..Border::default()
@@ -949,22 +985,119 @@ pub(super) fn canvas_style(theme: &Theme) -> container::Style {
     }
 }
 
-/// Quiet strip used for the bottom status bar.
+/// The bottom status bar: a pane of its own on the window frame.
 pub(super) fn strip_style(theme: &Theme) -> container::Style {
     let ext = theme.extended_palette();
     container::Style {
-        background: Some(ext.background.weak.color.into()),
+        text_color: Some(theme.palette().text),
+        background: Some(ext.background.base.color.into()),
         border: Border {
+            color: ext.background.strong.color,
+            width: 1.0,
             radius: 4.0.into(),
-            ..Border::default()
         },
         ..container::Style::default()
     }
+}
+
+/// What a filled status cell says.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Tone {
+    /// Something wanted: a needed spot, an open band.
+    Good,
+    Warn,
+    Bad,
+}
+
+impl Tone {
+    pub(super) fn fill(self, theme: &Theme) -> Color {
+        let hues = hues(theme);
+        match self {
+            Tone::Good => hues.good,
+            Tone::Warn => hues.warn,
+            Tone::Bad => hues.bad,
+        }
+    }
+}
+
+/// A table cell filled with a status colour, the same size as a
+/// [`cell`] of that width so the columns still line up.
+pub(super) fn filled_cell<'a>(
+    s: impl text::IntoFragment<'a>,
+    width: f32,
+    tone: Tone,
+) -> Element<'a, Message> {
+    container(
+        text(s)
+            .size(ROW_TEXT)
+            .font(MONO_BOLD)
+            .wrapping(text::Wrapping::None),
+    )
+    .width(Length::Fixed(width))
+    .align_x(iced::alignment::Horizontal::Center)
+    .clip(true)
+    .style(move |theme: &Theme| {
+        let fill = tone.fill(theme);
+        container::Style {
+            background: Some(fill.into()),
+            text_color: Some(ink_on(fill)),
+            ..container::Style::default()
+        }
+    })
+    .into()
+}
+
+/// A [`badge`] in a status colour.
+pub(super) fn tone_badge<'a>(s: impl text::IntoFragment<'a>, tone: Tone) -> Element<'a, Message> {
+    container(text(s).size(12).font(MONO_BOLD))
+        .padding([1, 6])
+        .style(move |theme: &Theme| {
+            let fill = tone.fill(theme);
+            container::Style {
+                background: Some(fill.into()),
+                text_color: Some(ink_on(fill)),
+                border: Border {
+                    radius: 3.0.into(),
+                    ..Border::default()
+                },
+                ..container::Style::default()
+            }
+        })
+        .into()
+}
+
+/// An ordinary push button: a solid face with a border, not a wash of
+/// the background.
+pub(super) fn push_button(theme: &Theme, status: button::Status) -> button::Style {
+    let hues = hues(theme);
+    let edge = theme.extended_palette().background.strong.color;
+    let toward = ink_on(hues.button);
+    let (face, text_color) = match status {
+        button::Status::Active => (hues.button, hues.button_text),
+        button::Status::Hovered => (mix(hues.button, toward, 0.12), hues.button_text),
+        button::Status::Pressed => (mix(hues.button, toward, 0.22), hues.button_text),
+        button::Status::Disabled => (hues.button, mix(hues.button, hues.button_text, 0.4)),
+    };
+    button::Style {
+        background: Some(face.into()),
+        text_color,
+        border: Border {
+            color: mix(edge, toward, 0.25),
+            width: 1.0,
+            radius: 3.0.into(),
+        },
+        ..button::Style::default()
+    }
+}
+
+/// `color` if it can be read on `ground`, otherwise black or white.
+fn ink_toward(color: Color, ground: Color) -> Color {
+    if contrast(color, ground) >= 4.5 { color } else { ink_on(ground) }
 }
 
 /// Filled pill for attention-grabbing badges (DUPE, NEW).
 pub(super) fn badge<'a>(s: impl text::IntoFragment<'a>, color: Color) -> Element<'a, Message> {
-    container(text(s).size(12).font(MONO).color(Color::BLACK))
+    container(text(s).size(12).font(MONO_BOLD).color(ink_on(color)))
         .padding([1, 6])
         .style(move |_theme: &Theme| container::Style {
             background: Some(color.into()),
@@ -995,19 +1128,18 @@ pub(super) fn tab_style(active: bool) -> impl Fn(&Theme, button::Status) -> butt
         let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
         button::Style {
             background: if active {
-                Some(hues.tab.into())
+                Some(hues.bar.into())
             } else if hovered {
                 Some(ext.background.weak.color.into())
             } else {
                 None
             },
             text_color: if active {
-                hues.tab_text
+                hues.bar_text
             } else {
-                Color {
-                    a: 0.6,
-                    ..theme.palette().text
-                }
+                // Tabs sit on the window frame.
+                let ink = ink_toward(theme.palette().text, hues.chrome);
+                Color { a: if hovered { 1.0 } else { 0.75 }, ..ink }
             },
             border: Border {
                 radius: 4.0.into(),
@@ -1133,7 +1265,7 @@ palette:
         };
         let shipped = names(ThemeSource::Slogger);
         assert_eq!(shipped[0], "slogger");
-        assert_eq!(shipped.len(), 1 + DESIGNED.len());
+        assert_eq!(shipped.len(), 1 + LOOKS.len());
         assert_eq!(names(ThemeSource::Bundled).len(), BUNDLED.len());
         // Iced already has a "Nord".
         assert_eq!(
@@ -1153,36 +1285,42 @@ palette:
         let entries = themes_from(None);
         assert_eq!(
             entries.len(),
-            1 + DESIGNED.len() + BUNDLED.len() + community::COMMUNITY.len() + Theme::ALL.len()
+            1 + LOOKS.len() + BUNDLED.len() + community::COMMUNITY.len() + Theme::ALL.len()
         );
     }
 
     #[test]
-    fn designed_themes_are_high_contrast_in_plain_colours() {
-        for (theme, &(name, tones)) in designed().zip(DESIGNED) {
-            let s = designed_scheme(tones);
-            assert!(contrast(s.text, s.background) >= 10.0, "{name}: text");
-            // The inks as chosen, before `legible` has had to step in.
-            for (what, c) in [("muted", s.muted), ("call", s.orange), ("freq", s.cyan)] {
-                let ratio = contrast(c, s.background);
-                assert!(ratio >= 4.5, "{name}: {what} is only {ratio:.1}:1");
-            }
-            // Pure red and blue are dim, so status colours may be nudged.
-            let p = theme.palette();
-            for c in [p.primary, p.success, p.warning, p.danger] {
-                assert!(contrast(c, s.background) >= 3.0, "{name}: status");
-            }
+    fn designed_themes_can_be_read_wherever_they_put_text() {
+        for (theme, look) in designed().zip(LOOKS) {
+            let name = look.name;
             let h = hues(&theme);
-            assert_eq!((h.band, h.mode), (s.text, s.text), "{name}");
-            assert_eq!(h.call, s.orange, "{name}");
-            // Solid fills: the bar stands out from the background, and
-            // everything drawn on a fill can be read there.
-            assert!(contrast(h.bar, s.background) >= 1.5, "{name}: bar is lost");
-            assert!(contrast(h.bar_text, h.bar) >= 4.5, "{name}: bar text");
-            for (what, c) in [("text", s.text), ("call", h.call), ("freq", h.freq)] {
-                let ratio = contrast(c, h.select);
-                assert!(ratio >= 4.5, "{name}: {what} on a selected row is {ratio:.1}:1");
+            let field = rgb(look.field);
+            let text = rgb(look.text);
+            // Nothing is nudged: the theme shows the colours as chosen.
+            assert_eq!((h.call, h.freq, h.muted), (rgb(look.call), rgb(look.freq), rgb(look.muted)));
+            assert_eq!((h.band, h.mode), (text, text), "{name}");
+            let p = theme.palette();
+            assert_eq!((p.background, p.text), (field, text), "{name}");
+
+            let reads = |what: &str, ink: Color, ground: Color, min: f32| {
+                let ratio = contrast(ink, ground);
+                assert!(ratio >= min, "{name}: {what} is only {ratio:.1}:1");
+            };
+            reads("text", text, field, 6.0);
+            reads("bar text", h.bar_text, h.bar, 4.5);
+            reads("button text", h.button_text, h.button, 4.5);
+            reads("frame text", text, h.chrome, 4.5);
+            for (what, ink) in [("text", text), ("call", h.call), ("freq", h.freq)] {
+                reads(&format!("{what} on a selected row"), ink, h.select, 4.5);
+                reads(&format!("{what} on a hovered row"), ink, rgb(look.surface), 4.0);
             }
+            for (what, fill) in [("good", h.good), ("warn", h.warn), ("bad", h.bad)] {
+                reads(&format!("{what} cell"), ink_on(fill), fill, 4.5);
+                reads(&format!("{what} status text"), fill, field, 3.0);
+            }
+            // The frame and the bars are tones of their own.
+            assert!(h.chrome != field, "{name}: frame and data share a tone");
+            assert!(contrast(h.bar, field) >= 1.3, "{name}: bar is lost on the data");
         }
     }
 

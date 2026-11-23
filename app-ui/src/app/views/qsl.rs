@@ -266,7 +266,7 @@ fn view_services_pane(app: &App) -> Element<'_, Message> {
     // Update reads only what changed at LoTW since the last sync; this
     // reads everything again.
     let resync_btn = button(text("Full LoTW resync"))
-        .style(button::secondary)
+        .style(theme::push_button)
         .on_press_maybe((!app.syncing).then_some(Message::LotwFullResyncPressed));
 
     let mut out = column![col, row![update_btn, resync_btn].spacing(8)].spacing(8);
@@ -435,7 +435,7 @@ fn view_pending_pane(app: &App) -> Element<'_, Message> {
         let mark_btn = match state.service_filter.0 {
             Some(s) => button(text(mark_label))
                 .on_press(Message::QslBulkMarkUploaded(s.key().into())),
-            None => button(text(mark_label)).style(button::secondary),
+            None => button(text(mark_label)).style(theme::push_button),
         };
         row![
             text(format!("{} selected:", state.selected.len())),
@@ -552,7 +552,9 @@ fn view_confirmations_pane(app: &App) -> Element<'_, Message> {
                 W_CONFIRMED
             ),
             cell(service_name(&c.service), W_SERVICE),
-            cell(c.call.as_str(), W_CALL).style(theme::call),
+            cell(c.call.as_str(), W_CALL)
+                .font(theme::MONO_BOLD)
+                .style(theme::call),
             cell(c.qso_begin.format("%Y-%m-%d %H:%M").to_string(), W_QSO_TIME).style(muted),
             cell(c.band.map(|b| b.as_adif()).unwrap_or(""), W_BAND).style(theme::band),
             cell(

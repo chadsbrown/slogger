@@ -437,7 +437,7 @@ pub(super) fn view(editor: &StationEditor) -> Element<'_, Message> {
 
     let fill = button(text("Fill from TQSL").size(style::ROW_TEXT))
         .padding([4, 10])
-        .style(button::secondary)
+        .style(style::push_button)
         .on_press_maybe(
             editor
                 .selected_tqsl()
@@ -546,7 +546,7 @@ pub(super) fn view(editor: &StationEditor) -> Element<'_, Message> {
         .on_press_maybe((!editor.saving).then_some(Message::StationEditor(StationEditorMsg::Save)));
     let cancel = button(text("Cancel").size(style::ROW_TEXT))
         .padding([4, 14])
-        .style(button::secondary)
+        .style(style::push_button)
         .on_press(Message::CloseModal);
     let footer = row![Space::new().width(Length::Fill), cancel, save]
         .spacing(8)

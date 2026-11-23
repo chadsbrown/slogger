@@ -66,7 +66,8 @@ pub(super) fn tab_bar(current: ViewKind) -> Element<'static, Message> {
             button(
                 row![
                     text(v.label()).size(14),
-                    theme::label(format!("^{}", v.shortcut_digit())),
+                    // Plain text, so it takes the tab's own colour.
+                    text(format!("^{}", v.shortcut_digit())).size(theme::LABEL_TEXT),
                 ]
                 .spacing(6)
                 .align_y(iced::Alignment::Center),

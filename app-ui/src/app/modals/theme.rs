@@ -60,8 +60,8 @@ pub(super) fn view<'a>(current: &'a Theme, themes: &'a [ThemeEntry]) -> Element<
 fn tile(theme: &Theme, is_current: bool) -> Element<'static, Message> {
     let palette = theme.extended_palette();
     let background = palette.background.base.color;
-    let name_color = palette.background.base.text;
     let hues = style::hues(theme);
+    let (bar, name_color) = (hues.bar, hues.bar_text);
 
     let name_row = row![
         text(theme.to_string())
@@ -70,9 +70,21 @@ fn tile(theme: &Theme, is_current: bool) -> Element<'static, Message> {
             .width(Length::Fill),
         text(if is_current { "✓" } else { "" })
             .size(style::ROW_TEXT)
-            .color(palette.primary.base.color),
+            .color(name_color),
     ]
     .align_y(iced::Alignment::Center);
+    // The name sits on the theme's title bar.
+    let title = container(name_row)
+        .padding([5, 14])
+        .width(Length::Fill)
+        .style(move |_: &Theme| container::Style {
+            background: Some(bar.into()),
+            border: Border {
+                radius: iced::border::top(5.0),
+                ..Border::default()
+            },
+            ..container::Style::default()
+        });
 
     // A table row as this theme would draw it.
     let sample = |s: &'static str, color: Color| {
@@ -92,20 +104,19 @@ fn tile(theme: &Theme, is_current: bool) -> Element<'static, Message> {
     .spacing(7);
 
     let swatches = row![
-        swatch(palette.primary.base.color),
-        swatch(palette.success.base.color),
-        swatch(palette.warning.base.color),
-        swatch(palette.danger.base.color),
+        // Status fills, then the row highlight and the window frame.
+        swatch(hues.good),
+        swatch(hues.warn),
+        swatch(hues.bad),
         Space::new().width(Length::Fill),
-        // The theme's two surface shades.
-        swatch(palette.background.weak.color),
-        swatch(palette.background.strong.color),
+        swatch(hues.select),
+        swatch(hues.chrome),
     ]
     .spacing(6)
     .align_y(iced::Alignment::Center);
 
-    let inner = container(column![name_row, sample_row, swatches].spacing(8))
-        .padding([12, 14])
+    let body = container(column![sample_row, swatches].spacing(8)).padding([9, 14]);
+    let inner = container(column![title, body])
         .width(Length::Fill)
         .style(move |_: &Theme| container::Style {
             background: Some(background.into()),
