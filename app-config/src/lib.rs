@@ -55,6 +55,11 @@ pub struct KeyerConfig {
     pub serial_port: Option<String>,
     /// Initial CW speed in WPM. Default 25 if unset.
     pub initial_wpm: Option<u8>,
+    /// Whether the WinKeyer makes its own sidetone. Default true if
+    /// unset. Turn it off when the rig's sidetone is enough — otherwise
+    /// the keyer's tone is heard as well (through its speaker, or mixed
+    /// into the headphones by an SO2R box).
+    pub sidetone: Option<bool>,
     /// Message buttons for the CW keyer pane, written as `[[keyer.macro]]`
     /// tables. Empty means "use the built-in set" — see
     /// [`KeyerConfig::macros`].
@@ -423,6 +428,123 @@ impl Config {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    /// A config with every field set. Written without `..Default` on
+    /// purpose: adding a field fails to compile here until it is listed,
+    /// and then `example_config_shows_every_option` fails until it is
+    /// also in docs/example-config.toml.
+    fn every_option() -> Config {
+        let s = || Some(String::from("x"));
+        let p = || Some(PathBuf::from("x"));
+        Config {
+            station: StationConfig { default_callsign: s() },
+            lotw: LotwConfig {
+                username: s(),
+                password: s(),
+                station_location: s(),
+                tqsl_path: p(),
+                tqsl_station_data: p(),
+            },
+            eqsl: EqslConfig { username: s(), password: s() },
+            clublog: ClubLogConfig { email: s(), password: s(), callsign: s() },
+            qrz: QrzConfig { api_key: s() },
+            hrdlog: HrdlogConfig { callsign: s(), code: s() },
+            dxcluster: DxClusterConfig {
+                my_callsign: s(),
+                sources: vec![ClusterSourceConfig { host: "x".into(), port: 1 }],
+                filter_file: p(),
+            },
+            wsjtx: WsjtxConfig { enabled: true, bind_addr: "x".into() },
+            rigs: vec![RigConfig {
+                enabled: true,
+                vendor: s(),
+                model: s(),
+                serial_port: s(),
+                baud_rate: Some(1),
+                host: s(),
+                label: s(),
+                transceive: true,
+            }],
+            keyer: KeyerConfig {
+                enabled: true,
+                serial_port: s(),
+                initial_wpm: Some(1),
+                sidetone: Some(true),
+                macros: vec![KeyerMacro::new("x", "x")],
+            },
+            so2r: So2rConfig {
+                enabled: true,
+                serial_port: s(),
+                initial_tx: Some(1),
+                initial_rx_mode: s(),
+            },
+            condx: CondXConfig { enabled: true, refresh_interval_secs: Some(1) },
+        }
+    }
+
+    /// Every key under `value`, however deeply nested (`sources` holds
+    /// `host` and `port`; `macro` holds `label` and `text`).
+    fn keys_of(value: &toml::Value, out: &mut Vec<String>) {
+        match value {
+            toml::Value::Table(table) => {
+                for (key, inner) in table {
+                    out.push(key.clone());
+                    keys_of(inner, out);
+                }
+            }
+            toml::Value::Array(items) => items.iter().for_each(|v| keys_of(v, out)),
+            _ => {}
+        }
+    }
+
+    #[test]
+    fn example_config_shows_every_option() {
+        let example = include_str!("../../docs/example-config.toml");
+        // Each section starts at its banner line, "# [name] — …".
+        let section = |name: &str| -> &str {
+            let is_banner = |line: &str| line.starts_with("# [") && line.contains("] — ");
+            let wanted = |line: &str| {
+                line.starts_with(&format!("# [{name}] — "))
+                    || line.starts_with(&format!("# [[{name}]] — "))
+            };
+            let mut start = None;
+            let mut offset = 0;
+            for line in example.split_inclusive('\n') {
+                match start {
+                    None if wanted(line) => start = Some(offset),
+                    Some(from) if is_banner(line) => return &example[from..offset],
+                    _ => {}
+                }
+                offset += line.len();
+            }
+            &example[start.unwrap_or_else(|| panic!("no [{name}] section in the example"))..]
+        };
+
+        let all = toml::Value::try_from(every_option()).unwrap();
+        let mut missing = Vec::new();
+        for (name, value) in all.as_table().unwrap() {
+            let text = section(name);
+            let mut keys = Vec::new();
+            keys_of(value, &mut keys);
+            for key in keys {
+                // Shown either live or commented out: "key = …" at the
+                // start of a line, after any "#" and spaces, or inside
+                // an inline table.
+                let shown = text.lines().any(|line| {
+                    let line = line.trim_start_matches(['#', ' ']);
+                    line.starts_with(&format!("{key} = "))
+                        || line.contains(&format!("{{ {key} = "))
+                        || line.contains(&format!(", {key} = "))
+                });
+                // `macro` is shown as its [[keyer.macro]] heading.
+                let heading = text.contains(&format!("[[{name}.{key}]]"));
+                if !shown && !heading {
+                    missing.push(format!("[{name}] {key}"));
+                }
+            }
+        }
+        assert!(missing.is_empty(), "docs/example-config.toml lacks: {missing:?}");
+    }
 
     #[test]
     fn missing_file_returns_defaults() {

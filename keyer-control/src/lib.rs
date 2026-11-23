@@ -19,6 +19,8 @@ pub struct KeyerConfig {
     /// Initial CW speed in WPM. Operators usually set this once at boot
     /// and adjust mid-QSO via the speed pot or set_wpm. Default 25.
     pub initial_wpm: u8,
+    /// Whether the WinKeyer makes its own sidetone.
+    pub sidetone: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -202,6 +204,7 @@ async fn build_keyer(cfg: &KeyerConfig) -> Result<Arc<dyn Keyer + Send + Sync>, 
     let initial_wpm = cfg.initial_wpm.max(5).min(50);
     let keyer = WinKeyerBuilder::new(&cfg.serial_port)
         .speed(initial_wpm)
+        .sidetone_enabled(cfg.sidetone)
         .build()
         .await
         .map_err(|e| ConnectError::Build(format!("{e:?}")))?;
@@ -217,6 +220,7 @@ mod tests {
         let cfg = KeyerConfig {
             serial_port: "/dev/ttyUSB1".into(),
             initial_wpm: 28,
+            sidetone: true,
         };
         assert_eq!(cfg.initial_wpm, 28);
     }

@@ -305,6 +305,7 @@ fn build_keyer_client_config(cfg: &KeyerConfigToml) -> Option<KeyerClientConfig>
     Some(KeyerClientConfig {
         serial_port: cfg.serial_port.clone()?,
         initial_wpm: cfg.initial_wpm.unwrap_or(25),
+        sidetone: cfg.sidetone.unwrap_or(true),
     })
 }
 

@@ -189,6 +189,7 @@ single-VFO (multi-slice not yet wired).
 enabled = true
 serial_port = "/dev/ttyUSB1"
 initial_wpm = 25
+sidetone = false
 ```
 
 | Field | Required | Default | Notes |
@@ -196,6 +197,7 @@ initial_wpm = 25
 | `enabled` | yes | `false` | |
 | `serial_port` | yes when enabled | none | WinKeyer USB serial device. |
 | `initial_wpm` | no | 25 | Clamped to 5..50 by the wrapper. |
+| `sidetone` | no | `true` | Whether the WinKeyer makes its own sidetone. Set `false` when the rig's sidetone is enough, or when the keyer's tone is also reaching the headphones. |
 
 **Capabilities**: `send_message(text)`, `abort`, `set_wpm(n)`,
 `set_tune(bool)`. Snapshot stream surfaces current WPM (operator twiddling
