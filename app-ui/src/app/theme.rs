@@ -573,6 +573,81 @@ fn designed() -> impl Iterator<Item = Theme> {
     LOOKS.iter().map(|look| look.scheme().theme_with(look.name, look.hues()))
 }
 
+/// Themes built on the Material Design 2 colour system. A primary colour
+/// marks structure (title bars, the active tab, buttons) and its dark
+/// variant the window frame; a secondary colour is kept for the one thing
+/// selected. Grounds stay neutral, callsigns take the primary's dark
+/// variant and all other data is plain, so status colours (never the
+/// primary or secondary) are the only other colour on screen. The dark
+/// ones follow its dark-theme rules: grey grounds that lighten as they
+/// rise, bars in a ground tone, and light, unsaturated accents.
+const DUOS: &[Look] = &[
+    Look {
+        name: "Indigo & Pink",
+        chrome: 0x303f9f, pane: 0xd5d9ee, field: 0xffffff, surface: 0xe8eaf6, line: 0x7986cb,
+        text: 0x212121, muted: 0x555a66, accent: 0x3f51b5, call: 0x1a237e, freq: 0x212121,
+        green: 0x2e7d32, amber: 0xe65100, red: 0xb00020, magenta: 0x7b1fa2, select: 0xff4081,
+        bar: 0x3f51b5, bar_text: 0xffffff, button: 0xf5f5f5,
+        select_text: Some(0x000000), edge: 1.0,
+    },
+    Look {
+        name: "Cyan & Violet",
+        chrome: 0x006064, pane: 0xcde4e7, field: 0xffffff, surface: 0xe0f7fa, line: 0x6ea3a8,
+        text: 0x212121, muted: 0x4c5b5d, accent: 0x00838f, call: 0x006064, freq: 0x212121,
+        green: 0x2e7d32, amber: 0xe65100, red: 0xb00020, magenta: 0x7b1fa2, select: 0x7c4dff,
+        bar: 0x00838f, bar_text: 0xffffff, button: 0xf5f5f5,
+        select_text: Some(0xffffff), edge: 1.0,
+    },
+    Look {
+        name: "Brown & Blue",
+        chrome: 0x4e342e, pane: 0xe0d5cf, field: 0xfffbf5, surface: 0xefebe9, line: 0xa1887f,
+        text: 0x212121, muted: 0x5d544f, accent: 0x6d4c41, call: 0x4e342e, freq: 0x212121,
+        green: 0x2e7d32, amber: 0xe65100, red: 0xb00020, magenta: 0x7b1fa2, select: 0x0277bd,
+        bar: 0x6d4c41, bar_text: 0xffffff, button: 0xfaf6f2,
+        select_text: Some(0xffffff), edge: 1.0,
+    },
+    Look {
+        name: "Slate & Cyan",
+        chrome: 0x263238, pane: 0xcfd8dc, field: 0xfafafa, surface: 0xeceff1, line: 0x78909c,
+        text: 0x212121, muted: 0x4a555a, accent: 0x455a64, call: 0x263238, freq: 0x212121,
+        green: 0x2e7d32, amber: 0xe65100, red: 0xb00020, magenta: 0x7b1fa2, select: 0x00b8d4,
+        bar: 0x455a64, bar_text: 0xffffff, button: 0xeceff1,
+        select_text: Some(0x000000), edge: 1.0,
+    },
+    // Bars blend into the page, so structure recedes and content leads;
+    // the primary shows only in headings, callsigns and the selection.
+    Look {
+        name: "Paper & Blue",
+        chrome: 0xbdbdbd, pane: 0xeeeeee, field: 0xffffff, surface: 0xe3f2fd, line: 0x9e9e9e,
+        text: 0x212121, muted: 0x5a5a5a, accent: 0x1976d2, call: 0x0d47a1, freq: 0x212121,
+        green: 0x2e7d32, amber: 0xe65100, red: 0xb00020, magenta: 0x7b1fa2, select: 0x1976d2,
+        bar: 0xcfcfcf, bar_text: 0x0d47a1, button: 0xffffff,
+        select_text: Some(0xffffff), edge: 1.0,
+    },
+    // A dark theme that is not very dark: blue-grey grounds.
+    Look {
+        name: "Dusk & Sky",
+        chrome: 0x263238, pane: 0x37474f, field: 0x455a64, surface: 0x4f6772, line: 0x78909c,
+        text: 0xffffff, muted: 0xcfd8dc, accent: 0x81d4fa, call: 0xb3e5fc, freq: 0xffffff,
+        green: 0xa5d6a7, amber: 0xffb74d, red: 0xff8a80, magenta: 0xce93d8, select: 0x81d4fa,
+        bar: 0x546e7a, bar_text: 0xffffff, button: 0x546e7a,
+        select_text: Some(0x000000), edge: 1.0,
+    },
+    // The Material baseline dark theme: #121212 lightened by elevation.
+    Look {
+        name: "Graphite & Violet",
+        chrome: 0x121212, pane: 0x1e1e1e, field: 0x2e2e2e, surface: 0x3a3a3a, line: 0x4a4a4a,
+        text: 0xe4e4e4, muted: 0xababab, accent: 0xbb86fc, call: 0xbb86fc, freq: 0xe4e4e4,
+        green: 0x81c784, amber: 0xffb74d, red: 0xcf6679, magenta: 0xf48fb1, select: 0x03dac6,
+        bar: 0x383838, bar_text: 0xe4e4e4, button: 0x383838,
+        select_text: Some(0x000000), edge: 1.0,
+    },
+];
+
+fn duos() -> impl Iterator<Item = Theme> {
+    DUOS.iter().map(|look| look.scheme().theme_with(look.name, look.hues()))
+}
+
 /// Ways of using one set of colours, to be compared side by side. Each
 /// is applied to a light and a dark theme, changing only where colour
 /// goes, never which colours there are.
@@ -788,13 +863,16 @@ pub(super) enum ThemeSource {
     Community,
     /// One colour set used several ways, for comparing them.
     Trial,
+    /// Built on a primary and a secondary colour.
+    Duo,
     /// One of iced's built-in themes.
     BuiltIn,
 }
 
 impl ThemeSource {
     /// Picker sections, in the order they are shown.
-    pub(super) const ALL: [ThemeSource; 6] = [
+    pub(super) const ALL: [ThemeSource; 7] = [
+        ThemeSource::Duo,
         ThemeSource::Trial,
         ThemeSource::Slogger,
         ThemeSource::Custom,
@@ -806,6 +884,7 @@ impl ThemeSource {
     /// Section heading in the picker.
     pub(super) fn title(self) -> &'static str {
         match self {
+            ThemeSource::Duo => "NEW: ONE COLOUR FOR STRUCTURE, ONE FOR THE SELECTION",
             ThemeSource::Slogger => "SLOGGER",
             ThemeSource::Custom => "YOUR THEMES",
             ThemeSource::Bundled => "COLLECTION",
@@ -840,6 +919,7 @@ fn themes_from(custom: Option<&Path>) -> Vec<ThemeEntry> {
         .chain(std::iter::once(app_theme()))
         .map(entry(ThemeSource::Slogger))
         .chain(trials().map(entry(ThemeSource::Trial)))
+        .chain(duos().map(entry(ThemeSource::Duo)))
         .collect();
     let bundled: Vec<ThemeEntry> = schemes(BUNDLED)
         .map(entry(ThemeSource::Bundled))
@@ -1671,6 +1751,7 @@ palette:
         assert_eq!(
             entries.len(),
             1 + LOOKS.len()
+                + DUOS.len()
                 + 2 * TRIALS.len()
                 + BUNDLED.len()
                 + community::COMMUNITY.len()
@@ -1680,7 +1761,7 @@ palette:
 
     #[test]
     fn designed_themes_can_be_read_wherever_they_put_text() {
-        for (theme, look) in designed().zip(LOOKS) {
+        for (theme, look) in designed().chain(duos()).zip(LOOKS.iter().chain(DUOS)) {
             let name = look.name;
             let h = hues(&theme);
             let field = rgb(look.field);
