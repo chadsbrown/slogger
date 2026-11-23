@@ -70,6 +70,17 @@ impl App {
                 for problem in &problems {
                     tracing::warn!("{problem}");
                 }
+                let mut problems = problems;
+                // A filter key dxfeed doesn't know is ignored silently,
+                // which looks exactly like a filter that isn't working.
+                if let Some(path) = &bundle.config.dxcluster.filter_file {
+                    for key in spot_feed::unknown_filter_keys(path) {
+                        let problem =
+                            format!("spot filter {}: unknown key \"{key}\" is ignored", path.display());
+                        tracing::warn!("{problem}");
+                        problems.push(problem);
+                    }
+                }
                 if let Some(first) = problems.into_iter().next() {
                     self.warn(first);
                 }

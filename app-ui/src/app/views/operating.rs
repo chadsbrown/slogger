@@ -294,6 +294,21 @@ impl App {
         if let Some(s) = &self.spots_status {
             summary.push_str(&format!("  ·  {s}"));
         }
+        // Whether cluster spots are being filtered, and by which file:
+        // an unfiltered feed is otherwise indistinguishable from a
+        // filter that isn't doing what was meant.
+        if self.spots_active {
+            let filter = self
+                .config
+                .as_ref()
+                .and_then(|c| c.dxcluster.filter_file.as_ref())
+                .and_then(|p| p.file_name())
+                .map(|name| name.to_string_lossy().into_owned());
+            summary.push_str(&match filter {
+                Some(name) => format!("  ·  filter: {name}"),
+                None => "  ·  no filter".to_string(),
+            });
+        }
         let toolbar = row![
             label(summary).width(Length::Fill),
             button(

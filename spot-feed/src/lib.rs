@@ -85,6 +85,50 @@ pub fn load_filter_file(
     })
 }
 
+/// Keys in a filter file that dxfeed does not recognise, as dotted
+/// paths ("mode_allow", "rf.modes"). dxfeed ignores such keys without
+/// complaint, so a misspelt or misplaced one filters nothing; callers
+/// report these so the operator finds out. Empty for a file that can't
+/// be read or parsed: [`load_filter_file`] reports that.
+pub fn unknown_filter_keys(path: &Path) -> Vec<String> {
+    let Ok(raw) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    unknown_keys_in(&raw)
+}
+
+fn unknown_keys_in(raw: &str) -> Vec<String> {
+    let Ok(given) = serde_json::from_str::<serde_json::Value>(raw) else {
+        return Vec::new();
+    };
+    // Every key dxfeed knows appears when its defaults are written out.
+    let Ok(known) = serde_json::to_value(dxfeed::filter::config::FilterConfigSerde::default())
+    else {
+        return Vec::new();
+    };
+    let mut unknown = Vec::new();
+    collect_unknown(&given, &known, "", &mut unknown);
+    unknown
+}
+
+fn collect_unknown(
+    given: &serde_json::Value,
+    known: &serde_json::Value,
+    prefix: &str,
+    out: &mut Vec<String>,
+) {
+    let (Some(given), Some(known)) = (given.as_object(), known.as_object()) else {
+        return;
+    };
+    for (key, value) in given {
+        let path = if prefix.is_empty() { key.clone() } else { format!("{prefix}.{key}") };
+        match known.get(key) {
+            Some(known_value) => collect_unknown(value, known_value, &path, out),
+            None => out.push(path),
+        }
+    }
+}
+
 const CHANNEL_DEPTH: usize = 256;
 
 pub async fn spawn_spot_feed(config: &SpotFeedConfig) -> Result<mpsc::Receiver<SpotEvent>, FeedError> {
@@ -211,6 +255,18 @@ fn dxmode_to_str(mode: dxfeed::domain::DxMode) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_shipped_cw_filter_has_no_unknown_keys() {
+        let raw = include_str!("../../docs/spot-filter-cw.json");
+        assert_eq!(unknown_keys_in(raw), Vec::<String>::new());
+    }
+
+    #[test]
+    fn misplaced_and_misspelt_filter_keys_are_found() {
+        let raw = r#"{ "mode_allow": ["CW"], "rf": { "modes": ["CW"], "band_allow": [] } }"#;
+        assert_eq!(unknown_keys_in(raw), ["mode_allow", "rf.modes"]);
+    }
 
     use dxfeed::domain::{Band, DxMode};
     use dxfeed::model::{
