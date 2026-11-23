@@ -130,14 +130,14 @@ impl App {
         self.theme_delete_armed = false;
         match std::fs::remove_file(&file) {
             Ok(()) => {
-                self.status = Some(format!("deleted theme '{current}'"));
+                self.say(format!("deleted theme '{current}'"));
                 self.reload_themes();
                 self.theme = theme::default_theme();
                 self.save_panel_layout()
             }
             Err(e) => {
                 tracing::warn!(path = %file.display(), "delete theme: {e}");
-                self.status = Some(format!("delete theme error: {e}"));
+                self.fail(format!("delete theme error: {e}"));
                 Task::none()
             }
         }
@@ -149,7 +149,7 @@ impl App {
         let (themes, problems) = theme::load_themes();
         self.themes = themes;
         if let Some(first) = problems.first() {
-            self.status = Some(match problems.len() {
+            self.warn(match problems.len() {
                 1 => first.clone(),
                 n => format!("{first} (and {} more, see the log)", n - 1),
             });
@@ -233,7 +233,7 @@ impl App {
             Ok(path) => {
                 let revert = editor.revert.clone();
                 self.theme_editor = None;
-                self.status = Some(format!("saved theme '{name}' to {}", path.display()));
+                self.say(format!("saved theme '{name}' to {}", path.display()));
                 self.reload_themes();
                 self.theme = theme::theme_by_name(&self.themes, &name).unwrap_or(revert);
                 self.save_panel_layout()

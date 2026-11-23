@@ -116,10 +116,20 @@ impl App {
         }
         // One line, clipped when it runs into the clock; hovering shows
         // the whole message.
-        let message = self.status.as_deref().unwrap_or("");
-        let clipped = container(text(message).size(13).wrapping(text::Wrapping::None))
-            .width(Length::Fill)
-            .clip(true);
+        // Informational messages and notices expire; the clock's tick
+        // redraws the bar, so they go without anything else happening.
+        let shown = self.status.as_ref().filter(|s| s.shown_at(std::time::Instant::now()));
+        let message = shown.map_or("", |s| s.text.as_str());
+        let tone = shown.and_then(|s| s.tone());
+        let coloured = move |theme: &iced::Theme| match tone {
+            Some(tone) => theme::tone_text(tone, theme),
+            None => text::Style::default(),
+        };
+        let clipped = container(
+            text(message).size(13).wrapping(text::Wrapping::None).style(coloured),
+        )
+        .width(Length::Fill)
+        .clip(true);
         let status_text: Element<'_, Message> = if message.is_empty() {
             clipped.into()
         } else {

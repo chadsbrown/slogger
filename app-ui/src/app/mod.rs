@@ -15,6 +15,7 @@ mod pota;
 mod preview;
 mod services;
 mod spots;
+mod status;
 mod state;
 mod subscriptions;
 mod theme;

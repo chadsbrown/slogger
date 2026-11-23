@@ -71,7 +71,7 @@ impl App {
                     tracing::warn!("{problem}");
                 }
                 if let Some(first) = problems.into_iter().next() {
-                    self.status = Some(first);
+                    self.warn(first);
                 }
                 self.config = Some(bundle.config);
                 if let Some(saved) = bundle.panel_layout {
@@ -184,7 +184,7 @@ impl App {
                 Task::none()
             }
             Message::QsoLoadedForEdit(Err(e)) => {
-                self.status = Some(format!("load qso error: {e}"));
+                self.fail(format!("load qso error: {e}"));
                 self.end_edit()
             }
             Message::CancelEditPressed => Task::batch([self.end_edit(), focus_call()]),
@@ -201,19 +201,19 @@ impl App {
                 )
             }
             Message::QsoDeleted(Ok(())) => {
-                self.status = Some("qso deleted".into());
+                self.settle();
                 Task::batch([self.end_edit(), self.refresh_task()])
             }
             Message::QsoDeleted(Err(e)) => {
-                self.status = Some(format!("delete error: {e}"));
+                self.fail(format!("delete error: {e}"));
                 Task::none()
             }
             Message::QsoUpdated(Ok(())) => {
-                self.status = Some("qso updated".into());
+                self.settle();
                 Task::batch([self.end_edit(), self.refresh_task(), focus_call()])
             }
             Message::QsoUpdated(Err(e)) => {
-                self.status = Some(format!("update error: {e}"));
+                self.fail(format!("update error: {e}"));
                 Task::none()
             }
             Message::WsjtxMessage(WsjtxMessage::LoggedAdif { id, adif }) => {
@@ -246,14 +246,11 @@ impl App {
             Message::WsjtxMessage(_) => Task::none(),
             Message::WsjtxImportFinished(Ok(count)) => {
                 self.wsjtx_imported += count;
-                self.status = Some(format!(
-                    "wsjtx: imported {count} qso (total this run: {})",
-                    self.wsjtx_imported
-                ));
+                self.settle();
                 self.refresh_task()
             }
             Message::WsjtxImportFinished(Err(e)) => {
-                self.status = Some(format!("wsjtx import error: {e}"));
+                self.fail(format!("wsjtx import error: {e}"));
                 Task::none()
             }
             Message::RigSnapshot(tagged) => {
@@ -321,11 +318,17 @@ impl App {
             Message::UseRigPressed => self.use_rig_now(),
             Message::SendToRigPressed => self.send_to_rig(),
             Message::SendToRigFinished(Ok(note)) => {
-                self.status = Some(format!("rig: {note}"));
+                // Tuning the rig is visible on the rig; only a mode that
+                // couldn't be sent is worth a line.
+                if note.contains("skipped") {
+                    self.notice(format!("rig: {note}"));
+                } else {
+                    self.settle();
+                }
                 Task::none()
             }
             Message::SendToRigFinished(Err(e)) => {
-                self.status = Some(format!("rig set error: {e}"));
+                self.fail(format!("rig set error: {e}"));
                 Task::none()
             }
             Message::KeyerSnapshot(snap) => {
@@ -341,10 +344,7 @@ impl App {
                 Task::none()
             }
             Message::QsoCreated(Ok(_id)) => {
-                self.status = Some(format!(
-                    "logged {}",
-                    self.call_input.trim().to_ascii_uppercase()
-                ));
+                self.settle();
                 self.call_input.clear();
                 self.dupe_match = None;
                 // Refocus the Call input so the operator can immediately
@@ -352,7 +352,7 @@ impl App {
                 Task::batch([self.refresh_task(), focus_call()])
             }
             Message::QsoCreated(Err(e)) => {
-                self.status = Some(format!("log error: {e}"));
+                self.fail(format!("log error: {e}"));
                 Task::none()
             }
             Message::Refreshed(Ok(snap)) => {
@@ -368,7 +368,7 @@ impl App {
                 Task::none()
             }
             Message::Refreshed(Err(e)) => {
-                self.status = Some(format!("refresh error: {e}"));
+                self.fail(format!("refresh error: {e}"));
                 Task::none()
             }
             Message::AdifPathChanged(s) => {
@@ -381,11 +381,11 @@ impl App {
                 };
                 let path = self.adif_path.trim().to_string();
                 if path.is_empty() {
-                    self.status = Some("ADIF path is empty".into());
+                    self.notice("ADIF path is empty");
                     return Task::none();
                 }
                 self.importing = true;
-                self.status = Some(format!("importing {path}…"));
+                self.say(format!("importing {path}…"));
                 Task::perform(import_adif_file(svc, path), Message::ImportFinished)
             }
             Message::ImportFinished(Ok(summary)) => {
@@ -403,18 +403,18 @@ impl App {
                 if let Some(first) = summary.first_errors.first() {
                     msg.push_str(&format!(" — first: {first}"));
                 }
-                self.status = Some(msg);
+                self.say(msg);
                 self.refresh_task()
             }
             Message::ImportFinished(Err(e)) => {
                 self.importing = false;
-                self.status = Some(format!("import error: {e}"));
+                self.fail(format!("import error: {e}"));
                 Task::none()
             }
             Message::ServicesUpdatePressed => self.start_services_update(),
             Message::ServicesUpdateFinished(summary) => {
                 self.syncing = false;
-                self.status = Some(format_multi_summary(&summary));
+                self.say(format_multi_summary(&summary));
                 // Persist the summary so the QSL view's Service status
                 // pane can render per-service detail (last error,
                 // counts, etc.) without losing it the next time
@@ -433,7 +433,7 @@ impl App {
                 // can be read (QSL tab) and in the log.
                 tracing::info!("{message}");
                 self.last_lotw_resync = Some(message.clone());
-                self.status = Some(message);
+                self.say(message);
                 // The QSL view's LoTW row shows the latest sync; the
                 // upload part of the last update still stands.
                 if let Some(lotw) = self
@@ -465,7 +465,7 @@ impl App {
                     None => self.station_locations.push(loc.clone()),
                 }
                 self.station_locations.sort_by(|a, b| a.name.cmp(&b.name));
-                self.status = Some(format!("saved station '{}'", loc.name));
+                self.settle();
                 let _ = self.select_station_location(loc.id);
                 focus_call()
             }
@@ -475,7 +475,7 @@ impl App {
                         editor.saving = false;
                         editor.error = Some(format!("save failed: {e}"));
                     }
-                    _ => self.status = Some(format!("save station error: {e}")),
+                    _ => self.fail(format!("save station error: {e}")),
                 }
                 Task::none()
             }
@@ -658,7 +658,7 @@ impl App {
             Message::KeyerSendMacro(text) => self.send_cw(text),
             Message::KeyerSendFinished(result) => {
                 if let Err(e) = result {
-                    self.status = Some(format!("keyer error: {e}"));
+                    self.fail(format!("keyer error: {e}"));
                 }
                 Task::none()
             }
@@ -703,7 +703,7 @@ impl App {
                 match self.expand_macro(&m) {
                     Ok(text) => self.send_cw(text),
                     Err(missing) => {
-                        self.status = Some(format!(
+                        self.notice(format!(
                             "F{n} {}: nothing to send for {missing} yet",
                             m.label
                         ));
@@ -746,14 +746,14 @@ impl App {
                 Task::none()
             }
             Message::KeyerSetWpmFinished(Err(e)) => {
-                self.status = Some(format!("keyer speed error: {e}"));
+                self.fail(format!("keyer speed error: {e}"));
                 Task::none()
             }
             Message::KeyerAbortFinished(result) => {
-                self.status = Some(match result {
-                    Ok(()) => "CW aborted".into(),
-                    Err(e) => format!("keyer abort error: {e}"),
-                });
+                match result {
+                    Ok(()) => self.settle(),
+                    Err(e) => self.fail(format!("keyer abort error: {e}")),
+                }
                 Task::none()
             }
             Message::ViewChanged(view) => {
@@ -1007,7 +1007,7 @@ impl App {
             return Task::none();
         }
         let Some(handle) = self.keyer_handle.clone() else {
-            self.status = Some("keyer not connected".into());
+            self.notice("keyer not connected");
             return Task::none();
         };
         Task::perform(
@@ -1299,7 +1299,7 @@ impl App {
         let call = match Callsign::parse(&self.call_input) {
             Ok(c) => c,
             Err(e) => {
-                self.status = Some(format!("invalid callsign: {e}"));
+                self.notice(format!("invalid callsign: {e}"));
                 return Task::none();
             }
         };
@@ -1414,13 +1414,13 @@ impl App {
     /// apps: last writer wins. Slogger doesn't try to coordinate.
     fn send_to_rig(&mut self) -> Task<Message> {
         let Some(handle) = self.active_rig_handle() else {
-            self.status = Some("active rig not connected".into());
+            self.notice("active rig not connected");
             return Task::none();
         };
         let freq_hz = parse_mhz_to_hz(&self.freq_input).map(|v| v as u64);
         let mode_adif: Option<String> = self.mode.as_ref().map(|m| m.as_adif().to_string());
         if freq_hz.is_none() && mode_adif.is_none() {
-            self.status = Some("nothing to send (set freq or mode in the form)".into());
+            self.notice("nothing to send (set freq or mode in the form)");
             return Task::none();
         }
         Task::perform(
@@ -1498,7 +1498,7 @@ impl App {
     /// `call_input` (that's the operator's working call) or RST fields.
     fn use_rig_now(&mut self) -> Task<Message> {
         let Some(snap) = self.active_rig_snapshot() else {
-            self.status = Some("active rig has no snapshot yet".into());
+            self.notice("active rig has no snapshot yet");
             return Task::none();
         };
         let snap = snap.clone();
@@ -1523,7 +1523,7 @@ impl App {
         // silently overwrite their form. They likely meant to cancel the
         // edit first — show a hint and skip rather than wreck the edit.
         if self.editing_qso.is_some() {
-            self.status = Some(format!(
+            self.notice(format!(
                 "spot {} ignored — finish or cancel the QSO edit first",
                 spot.call
             ));
@@ -1617,7 +1617,7 @@ impl App {
             return Task::none();
         };
         let Some(cfg) = self.config.clone() else {
-            self.status = Some("config not loaded".into());
+            self.notice("config not loaded");
             return Task::none();
         };
         let lotw_configured = super::lotw_upload::upload_configured(&self.station_locations)
@@ -1632,10 +1632,9 @@ impl App {
             && !qrz_configured
             && !hrdlog_configured
         {
-            self.status = Some(
+            self.notice(
                 "no service configured (set a TQSL location on a station location for LoTW, \
-                 or configure [lotw], [eqsl], [clublog], [qrz] or [hrdlog] in config.toml)"
-                    .into(),
+                 or configure [lotw], [eqsl], [clublog], [qrz] or [hrdlog] in config.toml)",
             );
             return Task::none();
         }
@@ -1643,7 +1642,7 @@ impl App {
             return Task::none();
         }
         self.syncing = true;
-        self.status = Some("updating services…".into());
+        self.say("updating services…");
         Task::perform(
             run_services_update(repo, station_repo, cfg),
             Message::ServicesUpdateFinished,
@@ -1658,19 +1657,18 @@ impl App {
             return Task::none();
         };
         let Some(cfg) = self.config.clone() else {
-            self.status = Some("config not loaded".into());
+            self.notice("config not loaded");
             return Task::none();
         };
         if !cfg.lotw.is_configured_for_fetch() {
-            self.status =
-                Some("LoTW sync needs [lotw] username and password in config.toml".into());
+            self.notice("LoTW sync needs [lotw] username and password in config.toml");
             return Task::none();
         }
         if self.syncing {
             return Task::none();
         }
         self.syncing = true;
-        self.status = Some("LoTW full resync: reading everything LoTW holds…".into());
+        self.say("LoTW full resync: reading everything LoTW holds…");
         Task::perform(
             async move { run_lotw_sync(repo, &cfg.lotw, true).await },
             Message::LotwFullResyncFinished,
@@ -1728,7 +1726,7 @@ mod tests {
         let _ = app.update(Message::KeyerTextChanged("qrl?".into()));
         let _ = app.update(Message::KeyerTextSubmitted);
         assert_eq!(app.keyer_text, "QRL?");
-        assert_eq!(app.status.as_deref(), Some("keyer not connected"));
+        assert_eq!(app.status.as_ref().map(|s| s.text.as_str()), Some("keyer not connected"));
     }
 
     #[test]

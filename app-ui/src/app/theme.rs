@@ -1478,6 +1478,14 @@ impl Tone {
     }
 }
 
+/// Text in a status colour, adjusted to stay readable on the theme's
+/// background.
+pub(super) fn tone_text(tone: Tone, theme: &Theme) -> text::Style {
+    text::Style {
+        color: Some(legible(tone.fill(theme), theme.palette().background, 4.5)),
+    }
+}
+
 /// A table cell filled with a status colour, the same size as a
 /// [`cell`] of that width so the columns still line up.
 pub(super) fn filled_cell<'a>(

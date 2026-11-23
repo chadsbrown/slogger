@@ -215,7 +215,12 @@ fn sample_app() -> App {
             cond("12m-10m", "night", "Poor"),
         ],
     });
-    app.status = Some("Logged EA5XYZ on 20M CW".into());
+    // SLOGGER_PREVIEW_STATUS=error|notice shows the coloured kinds.
+    match std::env::var("SLOGGER_PREVIEW_STATUS").as_deref() {
+        Ok("error") => app.fail("log error: database is locked"),
+        Ok("notice") => app.notice("keyer not connected"),
+        _ => app.say("ADIF import: 212 new, 3 duplicates skipped"),
+    }
     // SLOGGER_PREVIEW_NO_CONDX=1 leaves the CondX panel closed; open, it
     // covers the right-hand end of the Spots table.
     let no_condx = std::env::var("SLOGGER_PREVIEW_NO_CONDX").is_ok();

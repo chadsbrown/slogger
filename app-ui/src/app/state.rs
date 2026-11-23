@@ -136,7 +136,8 @@ pub struct App {
     pub(super) worked_by_band:
         std::collections::BTreeMap<Band, std::collections::HashSet<u16>>,
 
-    pub(super) status: Option<String>,
+    /// The status bar message, if any. See [`super::status`].
+    pub(super) status: Option<super::status::Status>,
 
     /// The Operating view's free-floating panels: where each one sits,
     /// which are open, their stacking order, and any drag in progress.
@@ -250,7 +251,10 @@ impl App {
             condx_active: false,
             condx: None,
             worked_by_band: Default::default(),
-            status: theme_problems.into_iter().next(),
+            status: theme_problems
+                .into_iter()
+                .next()
+                .map(|p| super::status::Status::new(super::status::Level::Warning, p)),
             panels: Panels::new(PanelKind::OPERATING),
             dupe_check_gen: 0,
             dupe_match: None,
