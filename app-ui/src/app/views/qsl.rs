@@ -359,13 +359,32 @@ fn describe_last_outcome(app: &App, svc: QslService) -> String {
         },
         QslService::Qrz => match &summary.qrz {
             None => "not configured".into(),
-            Some(s) => {
+Some(s) => {
+                let mut parts = Vec::new();
+                if let Some(f) = &s.fetch {
+                    parts.push(format!(
+                        "{} new conf / {} verified",
+                        f.new_confirmations, f.uploads_verified
+                    ));
+                } else if let Some(e) = &s.fetch_error {
+                    parts.push(format!("sync error: {e} (nothing uploaded)"));
+                }
+                if s.uploaded + s.duplicates + s.rejected > 0 {
+                    parts.push(format!(
+                        "up {} ok / {} already there / {} rejected",
+                        s.uploaded, s.duplicates, s.rejected
+                    ));
+                }
+                if s.held_back > 0 {
+                    parts.push(format!("{} for another logbook", s.held_back));
+                }
                 if let Some(e) = &s.upload_error {
-                    format!("up error: {e}")
-                } else if s.uploaded == 0 && s.rejected == 0 {
+                    parts.push(format!("error: {e}"));
+                }
+                if parts.is_empty() {
                     "nothing to do".into()
                 } else {
-                    format!("up {} ok / {} rejected", s.uploaded, s.rejected)
+                    parts.join(" · ")
                 }
             }
         },

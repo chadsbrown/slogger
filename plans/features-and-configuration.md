@@ -488,10 +488,35 @@ api_key = "ABCD-1234-EFGH-5678"
 
 | Field | Required | Default | Notes |
 |---|---|---|---|
-| `api_key` | yes | none | Per-account upload key from your QRZ logbook page. Distinct from QRZ XML subscription credentials. |
+| `api_key` | yes | none | The logbook's API access key, from your QRZ logbook settings page. Distinct from QRZ XML subscription credentials. |
 
-Upload-only. QRZ accepts ONE record per request, so the client splits
-multi-record ADIF at `<EOR>` boundaries.
+Upload and confirmation download. The API needs the logbook's owner to
+hold a QRZ subscription (XML level or higher); without one, or with a
+wrong key, the update stops with QRZ's reason.
+
+A key selects one logbook, and a QRZ logbook serves exactly one station
+callsign (`K1ABC` and `K1ABC/P` are separate books) over a range of
+dates. Each update:
+
+1. Asks QRZ which logbook the key selects.
+2. Reads back the records modified since the last sync — the whole
+   logbook the first time, about a second per thousand QSOs. QSOs found
+   there become upload-verified, and those QRZ has matched with the
+   other station's log become confirmed.
+3. Sends the QSOs still pending, one request each, up to 500 per update.
+   QSOs with another station callsign (or none), or dated outside the
+   logbook's range, are held back and stay pending. A QSO the logbook
+   already holds is marked uploaded; it is never overwritten, since that
+   would discard QRZ's confirmation of it.
+
+QRZ recognises a re-sent QSO only when its time agrees to the minute
+(seconds are ignored); one a minute out is added as a second record.
+Step 2 matches more loosely (within five minutes), which is what keeps
+QSOs already in the logbook from being sent again — so if step 2 fails,
+step 3 is skipped.
+
+`cargo run -p qrz-sync --example readonly_check -- <key-file>` checks a
+key against the live API without changing the logbook.
 
 #### `[hrdlog]`
 
