@@ -109,6 +109,11 @@ impl Scheme {
             freq: on(self.cyan),
             band: on(self.magenta),
             mode: on(self.accent),
+            select: mix(self.background, self.accent, 0.25),
+            bar: self.surface,
+            bar_text: mix(self.surface, self.text, 0.7),
+            tab: self.line,
+            tab_text: self.text,
         }
     }
 
@@ -143,6 +148,15 @@ pub(super) struct Hues {
     pub(super) freq: Color,
     pub(super) band: Color,
     pub(super) mode: Color,
+    /// Behind a highlighted table row. The data colours above have to
+    /// stay readable on it.
+    pub(super) select: Color,
+    /// A pane or panel title bar, and the text on it.
+    pub(super) bar: Color,
+    pub(super) bar_text: Color,
+    /// The active tab, and the text on it.
+    pub(super) tab: Color,
+    pub(super) tab_text: Color,
 }
 
 /// The hues of every scheme-built theme, by theme name. An iced `Theme`
@@ -210,27 +224,29 @@ pub(super) fn app_theme() -> Theme {
     SLOGGER.theme("slogger")
 }
 
-/// Themes designed for slogger, as `(name, [background, surface, line])`,
-/// dark-side first. Most sit on a background in the middle of the range
-/// (neither near-black nor glaring white), each a differently tinted
-/// grey; Classic Blue, Console, Classic Grey and Paper are the looks of
-/// older logging software. They share one set of plain colours per side
-/// (see [`Inks`]), so they differ only in the tone they sit on.
-const DESIGNED: &[(&str, [u32; 3])] = &[
-    ("Classic Blue", [0x0f2a70, 0x1a3a8a, 0x3558b0]),
-    ("Slate", [0x2f343d, 0x3a404a, 0x525a68]),
-    ("Graphite", [0x323234, 0x3e3e41, 0x58585c]),
-    ("Console", [0x141414, 0x222222, 0x444444]),
-    ("Pine", [0x2c3832, 0x37443d, 0x4d5e55]),
-    ("Umber", [0x3a322d, 0x463d37, 0x60544c]),
-    ("Dusk", [0x33323f, 0x3f3e4d, 0x59576b]),
-    ("Harbor", [0x293a47, 0x344654, 0x4a6072]),
-    ("Classic Grey", [0xc0c0c0, 0xb4b4b4, 0x808080]),
-    ("Paper", [0xf2f1ec, 0xe6e4dd, 0xbfbcb2]),
-    ("Fog", [0xcdd2d8, 0xc0c6cd, 0xa3abb5]),
-    ("Stone", [0xd2cfc8, 0xc5c2ba, 0xa8a49b]),
-    ("Parchment", [0xddd3bd, 0xd0c5ad, 0xb3a78c]),
-    ("Sage", [0xc9d1c4, 0xbcc5b6, 0x9eaa97]),
+/// Themes designed for slogger, as
+/// `(name, [background, surface, line, bar])`, dark-side first. Most sit
+/// on a background in the middle of the range (neither near-black nor
+/// glaring white), each a differently tinted grey; Classic Blue, Console,
+/// Classic Grey and Paper are the looks of older logging software. They
+/// share one set of plain colours per side (see [`Inks`]) and differ in
+/// the tone they sit on and in `bar`, the solid colour of their title
+/// bars and active tabs.
+const DESIGNED: &[(&str, [u32; 4])] = &[
+    ("Classic Blue", [0x0f2a70, 0x1a3a8a, 0x3558b0, 0x00a8a8]),
+    ("Slate", [0x2f343d, 0x3a404a, 0x525a68, 0x0050c8]),
+    ("Graphite", [0x323234, 0x3e3e41, 0x58585c, 0xd06000]),
+    ("Console", [0x141414, 0x222222, 0x444444, 0x00a000]),
+    ("Pine", [0x2c3832, 0x37443d, 0x4d5e55, 0x008850]),
+    ("Umber", [0x3a322d, 0x463d37, 0x60544c, 0xb03000]),
+    ("Dusk", [0x33323f, 0x3f3e4d, 0x59576b, 0x6a28d0]),
+    ("Harbor", [0x293a47, 0x344654, 0x4a6072, 0x0080b0]),
+    ("Classic Grey", [0xc0c0c0, 0xb4b4b4, 0x808080, 0x000080]),
+    ("Paper", [0xf2f1ec, 0xe6e4dd, 0xbfbcb2, 0x1a1a1a]),
+    ("Fog", [0xcdd2d8, 0xc0c6cd, 0xa3abb5, 0x004890]),
+    ("Stone", [0xd2cfc8, 0xc5c2ba, 0xa8a49b, 0x5a3000]),
+    ("Parchment", [0xddd3bd, 0xd0c5ad, 0xb3a78c, 0x800000]),
+    ("Sage", [0xc9d1c4, 0xbcc5b6, 0x9eaa97, 0x005030]),
 ];
 
 /// The colours the designed themes draw with: the pure, traditional ones
@@ -249,6 +265,8 @@ struct Inks {
     /// Frequencies.
     freq: u32,
     magenta: u32,
+    /// The bar behind a highlighted row; every ink above reads on it.
+    select: u32,
 }
 
 /// For the dark-side themes: white text, yellow callsigns, cyan
@@ -263,6 +281,7 @@ const DARK_INKS: Inks = Inks {
     call: 0xffff00,
     freq: 0x00ffff,
     magenta: 0xff00ff,
+    select: 0x0050c8,
 };
 
 /// For the light-side themes: black text, navy callsigns, teal
@@ -277,24 +296,45 @@ const LIGHT_INKS: Inks = Inks {
     call: 0x0000c0,
     freq: 0x005050,
     magenta: 0x800080,
+    select: 0xffe600,
 };
 
-fn designed_scheme([background, surface, line]: [u32; 3]) -> Scheme {
-    let inks = if luminance(rgb(background)) < 0.18 { DARK_INKS } else { LIGHT_INKS };
+fn inks_for(background: u32) -> Inks {
+    if luminance(rgb(background)) < 0.18 { DARK_INKS } else { LIGHT_INKS }
+}
+
+fn designed_scheme([background, surface, line, _bar]: [u32; 4]) -> Scheme {
+    let inks = inks_for(background);
     Scheme::from_hex([
         background, surface, line, inks.muted, inks.text, inks.accent,
         inks.green, inks.amber, inks.red, inks.freq, inks.magenta, inks.call,
     ])
 }
 
-/// The designed themes keep colour to callsigns, frequencies and status;
-/// bands and modes stay in the text colour.
+/// Black or white, whichever reads better on `on`.
+fn ink_on(on: Color) -> Color {
+    if contrast(Color::BLACK, on) >= contrast(Color::WHITE, on) {
+        Color::BLACK
+    } else {
+        Color::WHITE
+    }
+}
+
+/// The designed themes keep text colour to callsigns, frequencies and
+/// status (bands and modes stay in the text colour) and fill title bars,
+/// active tabs and highlighted rows with solid colour, not a wash of it.
 fn designed() -> impl Iterator<Item = Theme> {
     DESIGNED.iter().map(|&(name, tones)| {
         let scheme = designed_scheme(tones);
+        let bar = rgb(tones[3]);
         let hues = Hues {
             band: scheme.text,
             mode: scheme.text,
+            select: rgb(inks_for(tones[0]).select),
+            bar,
+            bar_text: ink_on(bar),
+            tab: bar,
+            tab_text: ink_on(bar),
             ..scheme.hues()
         };
         scheme.theme_with(name, hues)
@@ -797,7 +837,7 @@ pub(super) fn table_row<'a>(
         .style(move |theme: &Theme, status| {
             let ext = theme.extended_palette();
             let background = if highlighted {
-                Some(ext.primary.weak.color.scale_alpha(0.35).into())
+                Some(hues(theme).select.into())
             } else {
                 match status {
                     button::Status::Hovered | button::Status::Pressed => {
@@ -844,15 +884,12 @@ pub(super) fn pane_content_style(theme: &Theme) -> container::Style {
     }
 }
 
-/// Pane title bar: one step lighter than the body so the drag handle reads.
+/// Pane title bar: set off from the body so the drag handle reads.
 pub(super) fn title_bar_style(theme: &Theme) -> container::Style {
-    let ext = theme.extended_palette();
+    let hues = hues(theme);
     container::Style {
-        background: Some(ext.background.weak.color.into()),
-        text_color: Some(Color {
-            a: 0.7,
-            ..theme.palette().text
-        }),
+        background: Some(hues.bar.into()),
+        text_color: Some(hues.bar_text),
         border: Border {
             radius: iced::border::top(4.0),
             ..Border::default()
@@ -930,21 +967,32 @@ pub(super) fn badge<'a>(s: impl text::IntoFragment<'a>, color: Color) -> Element
         .into()
 }
 
+/// A text-only button sitting on a title bar.
+pub(super) fn bar_button(theme: &Theme, status: button::Status) -> button::Style {
+    let color = hues(theme).bar_text;
+    let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+    button::Style {
+        text_color: if hovered { color } else { Color { a: 0.75, ..color } },
+        ..button::Style::default()
+    }
+}
+
 /// A tab in the top view switcher.
 pub(super) fn tab_style(active: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
     move |theme: &Theme, status| {
         let ext = theme.extended_palette();
+        let hues = hues(theme);
         let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
         button::Style {
             background: if active {
-                Some(ext.background.strong.color.into())
+                Some(hues.tab.into())
             } else if hovered {
                 Some(ext.background.weak.color.into())
             } else {
                 None
             },
             text_color: if active {
-                theme.palette().text
+                hues.tab_text
             } else {
                 Color {
                     a: 0.6,
@@ -1117,6 +1165,14 @@ palette:
             let h = hues(&theme);
             assert_eq!((h.band, h.mode), (s.text, s.text), "{name}");
             assert_eq!(h.call, s.orange, "{name}");
+            // Solid fills: the bar stands out from the background, and
+            // everything drawn on a fill can be read there.
+            assert!(contrast(h.bar, s.background) >= 1.5, "{name}: bar is lost");
+            assert!(contrast(h.bar_text, h.bar) >= 4.5, "{name}: bar text");
+            for (what, c) in [("text", s.text), ("call", h.call), ("freq", h.freq)] {
+                let ratio = contrast(c, h.select);
+                assert!(ratio >= 4.5, "{name}: {what} on a selected row is {ratio:.1}:1");
+            }
         }
     }
 

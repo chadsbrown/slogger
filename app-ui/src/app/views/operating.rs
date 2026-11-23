@@ -111,7 +111,7 @@ impl App {
                     button(text("×").size(14))
                         .padding([0, 6])
                         .on_press(Message::PanelToggled(kind))
-                        .style(button::text),
+                        .style(theme::bar_button),
                 ]
                 .align_y(iced::Alignment::Center),
             )
