@@ -125,9 +125,18 @@ impl RigHandle {
     /// Set VFO-A mode from an ADIF-ish string. Unknown / unsupported
     /// modes return UnsupportedMode rather than guessing — the caller
     /// can decide whether to skip or surface the error.
+    ///
+    /// Does nothing when the rig is already in that mode. On Icom rigs
+    /// the set-mode command also selects a filter (riglib always sends
+    /// FIL1), so re-sending the current mode would throw away the
+    /// operator's filter choice on every spot click.
     pub async fn set_mode_adif(&self, adif: &str) -> Result<(), CommandError> {
         let mode = mode_from_adif(adif).ok_or_else(|| CommandError::UnsupportedMode(adif.to_string()))?;
         let rig = self.current_rig().await?;
+        let current = rig.get_mode(ReceiverId::VFO_A).await.ok();
+        if !mode_needs_setting(current, mode) {
+            return Ok(());
+        }
         rig.set_mode(ReceiverId::VFO_A, mode)
             .await
             .map_err(|e| CommandError::Set(format!("{e:?}")))
@@ -139,6 +148,13 @@ impl RigHandle {
             .map(Arc::clone)
             .ok_or_else(|| CommandError::Set("rig not connected".into()))
     }
+}
+
+/// Whether a set-mode command is needed to get the rig into `wanted`.
+/// `current` is `None` when the rig's mode couldn't be read; then the
+/// command is sent, since leaving the rig in the wrong mode is worse.
+fn mode_needs_setting(current: Option<riglib::Mode>, wanted: riglib::Mode) -> bool {
+    current != Some(wanted)
 }
 
 fn mode_from_adif(s: &str) -> Option<riglib::Mode> {
@@ -591,6 +607,16 @@ mod tests {
         assert!(lookup_flex_model("flex6600M").is_ok());
         assert!(lookup_flex_model("8600").is_ok());
         assert!(lookup_flex_model("nope").is_err());
+    }
+
+    #[test]
+    fn mode_is_only_set_when_it_differs() {
+        use riglib::Mode;
+        assert!(!mode_needs_setting(Some(Mode::CW), Mode::CW));
+        assert!(mode_needs_setting(Some(Mode::CW), Mode::USB));
+        assert!(mode_needs_setting(Some(Mode::USB), Mode::DataUSB));
+        // Unreadable mode: send the command rather than guess.
+        assert!(mode_needs_setting(None, Mode::CW));
     }
 
     #[test]
