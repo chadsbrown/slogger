@@ -24,6 +24,8 @@ pub(super) const ROW_TEXT: f32 = 13.0;
 /// Size for field labels, column headers and hints.
 pub(super) const LABEL_TEXT: f32 = 11.0;
 
+mod community;
+
 /// Everything a theme defines. iced's own [`Palette`] has six of these;
 /// the rest are the surface shades and the extra hues that give a scheme
 /// its character.
@@ -481,16 +483,20 @@ pub(super) enum ThemeSource {
     Custom,
     /// A scheme from elsewhere, shipped with slogger.
     Bundled,
+    /// A palette from the Omarchy community theme list, shipped with
+    /// slogger.
+    Community,
     /// One of iced's built-in themes.
     BuiltIn,
 }
 
 impl ThemeSource {
     /// Picker sections, in the order they are shown.
-    pub(super) const ALL: [ThemeSource; 4] = [
+    pub(super) const ALL: [ThemeSource; 5] = [
         ThemeSource::Slogger,
         ThemeSource::Custom,
         ThemeSource::Bundled,
+        ThemeSource::Community,
         ThemeSource::BuiltIn,
     ];
 
@@ -500,6 +506,7 @@ impl ThemeSource {
             ThemeSource::Slogger => "SLOGGER",
             ThemeSource::Custom => "YOUR THEMES",
             ThemeSource::Bundled => "COLLECTION",
+            ThemeSource::Community => "OMARCHY COMMUNITY",
             ThemeSource::BuiltIn => "CLASSICS",
         }
     }
@@ -527,7 +534,10 @@ fn themes_from(custom: Option<&Path>) -> Vec<ThemeEntry> {
         .chain(designed())
         .map(entry(ThemeSource::Slogger))
         .collect();
-    let bundled: Vec<ThemeEntry> = schemes(BUNDLED).map(entry(ThemeSource::Bundled)).collect();
+    let bundled: Vec<ThemeEntry> = schemes(BUNDLED)
+        .map(entry(ThemeSource::Bundled))
+        .chain(schemes(community::COMMUNITY).map(entry(ThemeSource::Community)))
+        .collect();
     let built_in = Theme::ALL.iter().cloned().map(entry(ThemeSource::BuiltIn));
 
     // Names identify themes in the layout file, so each must be unique.
@@ -1143,7 +1153,7 @@ palette:
         let entries = themes_from(None);
         assert_eq!(
             entries.len(),
-            1 + DESIGNED.len() + BUNDLED.len() + Theme::ALL.len()
+            1 + DESIGNED.len() + BUNDLED.len() + community::COMMUNITY.len() + Theme::ALL.len()
         );
     }
 
