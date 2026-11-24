@@ -2,7 +2,8 @@
 //! holds the view tabs, the Panels menu and the status message. Per-view content lives in `views/`.
 
 use iced::widget::{
-    Space, button, column, container, mouse_area, pick_list, row, stack, text, tooltip,
+    Space, button, column, container, mouse_area, pick_list, rich_text, row, span, stack, text,
+    tooltip,
 };
 use iced::{Element, Length};
 
@@ -155,15 +156,7 @@ impl App {
         .align_y(iced::Alignment::Center);
         for view in ViewKind::ALL {
             left = left.push(
-                button(
-                    row![
-                        text(view.label()).size(13),
-                        // Plain text, so it takes the tab's own colour.
-                        text(format!("^{}", view.shortcut_digit())).size(theme::LABEL_TEXT),
-                    ]
-                    .spacing(4)
-                    .align_y(iced::Alignment::Center),
-                )
+                button(text(view.label()).size(13))
                 .padding([2, 8])
                 .on_press(Message::ViewChanged(*view))
                 .style(theme::tab_style(*view == self.current_view)),
@@ -211,14 +204,16 @@ impl App {
             status_text,
         );
 
-        let clock = row![
-            text(chrono::Utc::now().format("%H:%M:%S").to_string())
+        // One piece of text, so that the small "UTC" sits on the same
+        // baseline as the time whatever the fonts' metrics.
+        let muted = theme::hues(&self.theme).muted;
+        let clock = rich_text![
+            span(chrono::Utc::now().format("%Y-%m-%d  %H:%M:%S").to_string())
                 .size(14)
                 .font(theme::MONO),
-            theme::label("UTC"),
+            span(" UTC").size(theme::LABEL_TEXT).color(muted),
         ]
-        .spacing(6)
-        .align_y(iced::Alignment::Center);
+        .on_link_click(iced::never);
 
         let right = row![
             small_button("A−", Message::FontScaleDown),
@@ -236,11 +231,17 @@ impl App {
         .spacing(6)
         .align_y(iced::Alignment::Center);
 
-        // The message gets all the width the controls don't need; the
-        // clock sits with the controls on the right.
-        let content = row![container(left).width(Length::Fill), clock, right]
-            .spacing(16)
-            .align_y(iced::Alignment::Center);
+        // Left and right get equal shares so the clock sits at the true
+        // centre of the window whatever their contents.
+        let content = row![
+            container(left).width(Length::FillPortion(1)),
+            clock,
+            container(right)
+                .width(Length::FillPortion(1))
+                .align_x(iced::alignment::Horizontal::Right),
+        ]
+        .spacing(10)
+        .align_y(iced::Alignment::Center);
 
         container(content)
             .padding([4, 8])
