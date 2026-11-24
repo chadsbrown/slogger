@@ -150,6 +150,7 @@ pub async fn spawn_spot_feed(config: &SpotFeedConfig) -> Result<mpsc::Receiver<S
     if let Some(path) = &config.filter_path {
         let filter = load_filter_file(path)?;
         modes = ModeRule {
+            file: Some(path.display().to_string()),
             allow: filter.rf.mode_allow.iter().copied().collect(),
             deny: filter.rf.mode_deny.iter().copied().collect(),
         };
@@ -204,6 +205,9 @@ struct SpotTracker {
 /// The modes a filter file lets through.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 struct ModeRule {
+    /// The filter file the rule came from; `None` when the config
+    /// names no filter file, so nothing is filtered at all.
+    file: Option<String>,
     /// Empty means every mode not denied.
     allow: Vec<dxfeed::domain::DxMode>,
     deny: Vec<dxfeed::domain::DxMode>,
@@ -216,6 +220,13 @@ impl ModeRule {
 
     /// For the log and the spot tooltip: "CW only", "any mode", ...
     fn describe(&self) -> String {
+        let Some(file) = &self.file else {
+            return "none (no filter_file under [dxcluster] in config.toml)".to_string();
+        };
+        format!("{} ({file})", self.rule())
+    }
+
+    fn rule(&self) -> String {
         let list = |modes: &[dxfeed::domain::DxMode]| {
             modes.iter().map(|m| format!("{m:?}")).collect::<Vec<_>>().join(", ")
         };
@@ -348,9 +359,10 @@ mod tests {
     fn a_spot_outside_the_filters_modes_is_never_shown() {
         use dxfeed::domain::{Band, DxMode};
         use dxfeed::model::SpotEventKind;
-        let cw_only = ModeRule { allow: vec![DxMode::CW], deny: vec![] };
-        assert_eq!(cw_only.describe(), "CW only");
-        assert_eq!(ModeRule::default().describe(), "any mode");
+        let cw_only = ModeRule { file: Some("f.json".into()), allow: vec![DxMode::CW], deny: vec![] };
+        assert_eq!(cw_only.describe(), "CW only (f.json)");
+        assert!(ModeRule::default().describe().starts_with("none"));
+        assert_eq!(ModeRule { file: Some("f.json".into()), ..ModeRule::default() }.describe(), "any mode (f.json)");
         assert!(ModeRule::default().permits(DxMode::SSB));
 
         // The test events are CW: shown under a CW-only rule, and under
@@ -360,9 +372,9 @@ mod tests {
             t.translate(spot_event("K1ABC", Band::B20, 14_025_000, 14_025_000, SpotEventKind::New));
         assert_eq!(shown.len(), 1);
         let SpotEvent::Spot(spot) = &shown[0] else { panic!("expected a spot") };
-        assert!(spot.origin.as_deref().unwrap().ends_with("filter: CW only"), "{:?}", spot.origin);
+        assert!(spot.origin.as_deref().unwrap().ends_with("filter: CW only (f.json)"), "{:?}", spot.origin);
 
-        let ssb_only = ModeRule { allow: vec![DxMode::SSB], deny: vec![] };
+        let ssb_only = ModeRule { file: Some("f.json".into()), allow: vec![DxMode::SSB], deny: vec![] };
         let mut t = SpotTracker { modes: ssb_only, ..SpotTracker::default() };
         assert!(
             t.translate(spot_event("K1ABC", Band::B20, 14_025_000, 14_025_000, SpotEventKind::New))
