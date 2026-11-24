@@ -216,7 +216,7 @@
 #
 # Upload requires TQSL on PATH (or set tqsl_path). Which TQSL station
 # location signs which QSOs is NOT set here: each slogger station location
-# names its own TQSL location (bottom bar -> Edit). QSOs whose location
+# names its own TQSL location (QSL tab -> Station location -> Edit). QSOs whose location
 # has no TQSL location, or names one TQSL doesn't have, are held back and
 # the upload summary says why. Fetch verifies (your QSO is at LotW) AND
 # confirms (other station also has matching) in one round-trip.
