@@ -24,6 +24,7 @@ use crate::app::drawers::awards::AwardKind;
 use crate::app::focus::{
     ENTRY_CALL_ID, ENTRY_FREQ_ID, ENTRY_RST_RCVD_ID, ENTRY_RST_SENT_ID, KEYER_TEXT_ID,
 };
+use crate::app::greyline;
 use crate::app::message::Message;
 use crate::app::pota;
 use crate::app::spots::{
@@ -792,6 +793,25 @@ impl App {
         }
 
         scrollable(col).into()
+    }
+}
+
+impl App {
+    // ---- Greyline ----
+
+    /// A world map with the night side shaded and the station marked,
+    /// over a line giving the next sunrise and sunset there.
+    pub(in crate::app) fn greyline_pane(&self) -> Element<'_, Message> {
+        let now = chrono::Utc::now();
+        let location = self.active_location.as_ref();
+        let map = iced::widget::canvas(greyline::Map {
+            cache: &self.greyline_cache,
+            now,
+            station: location.and_then(greyline::station_position),
+        })
+        .width(Length::Fill)
+        .height(Length::Fill);
+        column![map, label(greyline::caption(location, now))].spacing(6).into()
     }
 }
 

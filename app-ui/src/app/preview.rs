@@ -224,9 +224,40 @@ fn sample_app() -> App {
     }
     // SLOGGER_PREVIEW_NO_CONDX=1 leaves the CondX panel closed; open, it
     // covers the right-hand end of the Spots table.
+    // SLOGGER_PREVIEW_GREYLINE=1 opens the Greyline map, which otherwise
+    // stays closed because it covers the lower left of Spots.
     let no_condx = std::env::var("SLOGGER_PREVIEW_NO_CONDX").is_ok();
+    let greyline = std::env::var("SLOGGER_PREVIEW_GREYLINE").is_ok();
+    if greyline {
+        // A station to mark on the map.
+        let now = chrono::Utc::now();
+        app.active_location = Some(radio_core::StationLocation {
+            id: radio_core::StationLocationId::new(),
+            name: "Home".into(),
+            station_callsign: None,
+            owner_callsign: None,
+            city: None,
+            county: None,
+            state: None,
+            country: None,
+            grid: Some("FN31pr".into()),
+            latitude: None,
+            longitude: None,
+            cq_zone: None,
+            itu_zone: None,
+            iota: None,
+            lotw_station_location: None,
+            eqsl_account: None,
+            created_at: now,
+            updated_at: now,
+        });
+    }
     for kind in super::panels::PanelKind::OPERATING {
-        let wanted = !(no_condx && *kind == super::panels::PanelKind::CondX);
+        let wanted = match kind {
+            super::panels::PanelKind::CondX => !no_condx,
+            super::panels::PanelKind::Greyline => greyline,
+            _ => true,
+        };
         if app.panels.is_open(*kind) != wanted {
             app.panels.toggle(*kind);
         }
@@ -284,6 +315,9 @@ fn render_theme_previews() {
                 let _ = app.edit_theme(true);
                 let _ = app.update_theme_editor(EditorMessage::Toggle(super::theme::Role::Pane));
             }
+            // The map is cached between draws; the app clears it every
+            // second, which doesn't happen here.
+            app.greyline_cache.clear();
             let drawn = app.theme.clone();
             let mut ui = Simulator::with_size(Settings::default(), WINDOW, app.view());
             let shot = ui.snapshot(&drawn).expect("snapshot");

@@ -131,6 +131,9 @@ pub struct App {
     pub(super) condx_active: bool,
     /// The latest CondX reading. `None` until the first poll succeeds.
     pub(super) condx: Option<CondXSnapshot>,
+    /// The Greyline map as last drawn. Cleared every second so that the
+    /// map follows the clock, the theme and the station location.
+    pub(super) greyline_cache: iced::widget::canvas::Cache,
     /// Per-band set of worked DXCC entity IDs. Recomputed from
     /// `awards.dxcc_by_band` on each refresh; used to annotate spots.
     pub(super) worked_by_band:
@@ -250,6 +253,7 @@ impl App {
             so2r_handle: None,
             condx_active: false,
             condx: None,
+            greyline_cache: iced::widget::canvas::Cache::new(),
             worked_by_band: Default::default(),
             status: theme_problems
                 .into_iter()

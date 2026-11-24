@@ -35,6 +35,7 @@ pub enum PanelKind {
     Station,
     Recent,
     CondX,
+    Greyline,
     // QSL tab
     QslServices,
     QslPending,
@@ -57,6 +58,7 @@ impl PanelKind {
         PanelKind::Keyer,
         PanelKind::Station,
         PanelKind::CondX,
+        PanelKind::Greyline,
     ];
 
     /// The QSL tab's panels.
@@ -83,6 +85,7 @@ impl PanelKind {
             PanelKind::Station => "Station",
             PanelKind::Recent => "Recent QSOs",
             PanelKind::CondX => "CondX",
+            PanelKind::Greyline => "Greyline",
             PanelKind::QslServices => "Services",
             PanelKind::QslPending => "Pending uploads",
             PanelKind::QslConfirmations => "Recent confirmations",
@@ -110,7 +113,8 @@ impl PanelKind {
     /// ```
     ///
     /// CondX starts closed; when opened it sits over the right-hand end
-    /// of Spots (the comment column), clear of the Entry form.
+    /// of Spots (the comment column), clear of the Entry form. Greyline
+    /// starts closed too, and opens over the lower left of Spots.
     ///
     /// QSL stacks its three panels full width: Services, then Pending
     /// uploads (the largest), then Recent confirmations. Logbook has
@@ -125,6 +129,7 @@ impl PanelKind {
             PanelKind::Station => (0.60, 0.50, 0.40, 0.18),
             PanelKind::Recent => (0.00, 0.68, 1.00, 0.32),
             PanelKind::CondX => (0.36, 0.00, 0.24, 0.42),
+            PanelKind::Greyline => (0.00, 0.26, 0.42, 0.42),
             PanelKind::QslServices => (0.00, 0.00, 1.00, 0.30),
             PanelKind::QslPending => (0.00, 0.30, 1.00, 0.38),
             PanelKind::QslConfirmations => (0.00, 0.68, 1.00, 0.32),
@@ -157,6 +162,8 @@ impl PanelKind {
             // An optional network feed: off until the operator asks, so
             // existing layouts look the same as before it existed.
             PanelKind::CondX => false,
+            // A map is something to glance at now and then.
+            PanelKind::Greyline => false,
         }
     }
 }

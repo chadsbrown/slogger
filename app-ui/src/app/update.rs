@@ -673,7 +673,10 @@ impl App {
                 }
                 Task::none()
             }
-            Message::Tick => Task::none(),
+            Message::Tick => {
+                self.greyline_cache.clear();
+                Task::none()
+            }
             Message::FontScaleUp => self.set_font_scale(self.font_scale + theme::FONT_SCALE_STEP),
             Message::FontScaleDown => self.set_font_scale(self.font_scale - theme::FONT_SCALE_STEP),
             Message::FontScaleReset => self.set_font_scale(1.0),

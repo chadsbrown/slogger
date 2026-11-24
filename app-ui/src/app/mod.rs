@@ -4,6 +4,7 @@ mod constants;
 mod drawers;
 mod editor;
 mod focus;
+mod greyline;
 mod helpers;
 mod layout;
 mod lotw_upload;

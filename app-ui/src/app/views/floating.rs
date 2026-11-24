@@ -150,6 +150,7 @@ impl App {
             PanelKind::Keyer => self.keyer_pane(),
             PanelKind::Recent => self.recent_pane(),
             PanelKind::CondX => self.condx_pane(),
+            PanelKind::Greyline => self.greyline_pane(),
             PanelKind::QslServices => super::qsl::view_services_pane(self),
             PanelKind::QslPending => super::qsl::view_pending_pane(self),
             PanelKind::QslConfirmations => super::qsl::view_confirmations_pane(self),
