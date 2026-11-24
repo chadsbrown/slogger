@@ -54,6 +54,7 @@ winkey = { git = "https://github.com/chadsbrown/winkey" }
 otrsp = { git = "https://github.com/chadsbrown/otrsp" }
 quick-xml = "0.37"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "multipart"] }
+serde_ignored = "0.1"
 toml = "0.8"
 tempfile = "3"
 

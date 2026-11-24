@@ -70,7 +70,17 @@ impl App {
                 for problem in &problems {
                     tracing::warn!("{problem}");
                 }
-                let mut problems = problems;
+                // An unknown key in config.toml is ignored silently too:
+                // a setting under the wrong section simply has no effect.
+                // These go first, since only the first problem is shown.
+                let mut problems: Vec<String> = app_config::Config::default_path()
+                    .map(|path| app_config::Config::unknown_keys(&path))
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|key| format!("config.toml: unknown key \"{key}\" is ignored"))
+                    .inspect(|problem| tracing::warn!("{problem}"))
+                    .chain(problems)
+                    .collect();
                 // A filter key dxfeed doesn't know is ignored silently,
                 // which looks exactly like a filter that isn't working.
                 if let Some(path) = &bundle.config.dxcluster.filter_file {

@@ -398,6 +398,14 @@ impl LotwConfig {
     }
 }
 
+fn unknown_keys_in(text: &str) -> Vec<String> {
+    let mut unknown = Vec::new();
+    let de = toml::Deserializer::new(text);
+    let _: Result<Config, _> =
+        serde_ignored::deserialize(de, |path| unknown.push(path.to_string()));
+    unknown
+}
+
 impl Config {
     pub fn default_path() -> Result<PathBuf, ConfigError> {
         let dir = dirs::config_dir().ok_or(ConfigError::NoConfigDir)?;
@@ -426,6 +434,16 @@ impl Config {
                 error: e.to_string(),
             }),
         }
+    }
+
+    /// Keys in the config file that slogger does not recognise, as
+    /// dotted paths ("dxcluster.filter", "dxcluster.sources.1.filter_file").
+    /// Such keys are otherwise ignored without complaint, so a misspelt
+    /// or misplaced one looks exactly like a setting that has no effect.
+    /// Empty when the file is missing or does not parse: loading reports
+    /// that.
+    pub fn unknown_keys(path: &Path) -> Vec<String> {
+        std::fs::read_to_string(path).map(|text| unknown_keys_in(&text)).unwrap_or_default()
     }
 
     /// Write a starter config file with empty sections, for a user to fill in.
@@ -773,6 +791,17 @@ mod tests {
         let cfg = Config::load_from(&path).unwrap();
         assert_eq!(cfg.eqsl.username.as_deref(), Some("W1ABC"));
         assert!(cfg.eqsl.is_configured());
+    }
+
+    #[test]
+    fn misplaced_and_misspelt_config_keys_are_found() {
+        // After an array-of-tables header a key belongs to that source,
+        // not to [dxcluster].
+        let text = "[dxcluster]\nmy_callsign = \"W1ABC\"\nfilter = \"a.json\"\n\
+                    [[dxcluster.sources]]\nhost = \"h\"\nport = 1\nfilter_file = \"a.json\"\n";
+        assert_eq!(unknown_keys_in(text), ["dxcluster.filter", "dxcluster.sources.0.filter_file"]);
+        assert!(unknown_keys_in("[dxcluster]\nfilter_file = \"a.json\"\n").is_empty());
+        assert_eq!(unknown_keys_in("filter_file = \"a.json\"\n[dxcluster]\n"), ["filter_file"]);
     }
 
     #[test]
