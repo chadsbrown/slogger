@@ -321,14 +321,6 @@ impl<Message> canvas::Program<Message> for Map<'_> {
             });
             frame.stroke(&terminator, Stroke::default().with_color(hues.warn).with_width(1.5));
 
-            // The sun, where it is overhead.
-            let overhead = Point::new(x_of(sun.longitude), y_of(sun.declination));
-            frame.fill(&Path::circle(overhead, 5.0), hues.warn);
-            frame.stroke(
-                &Path::circle(overhead, 5.0),
-                Stroke::default().with_color(Color::BLACK).with_width(1.0),
-            );
-
             // The station.
             if let Some((lat, lon)) = self.station {
                 let here = Point::new(x_of(lon), y_of(lat));
