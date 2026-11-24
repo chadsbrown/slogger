@@ -574,7 +574,16 @@ impl App {
                     super::views::ViewKind::Qsl => self.qsl_panels.reset(),
                     super::views::ViewKind::Logbook => self.logbook_panels.reset(),
                 }
+                self.panels_menu_open = false;
                 self.save_panel_layout()
+            }
+            Message::PanelsMenuToggled => {
+                self.panels_menu_open = !self.panels_menu_open;
+                Task::none()
+            }
+            Message::PanelsMenuClosed => {
+                self.panels_menu_open = false;
+                Task::none()
             }
             Message::LayoutSaveCompleted => Task::none(),
 
@@ -780,6 +789,8 @@ impl App {
                     Task::none()
                 };
                 self.current_view = view;
+                // The menu lists one tab's panels.
+                self.panels_menu_open = false;
                 // Auto-refresh the QSL Pending pane on first switch
                 // into QSL so the operator sees fresh data immediately.
                 let confirmations = if matches!(view, super::views::ViewKind::Qsl)

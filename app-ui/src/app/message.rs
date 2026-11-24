@@ -118,6 +118,10 @@ pub enum Message {
     /// Put every panel of the tab being shown back to its default
     /// place, size and visibility.
     PanelsReset,
+    /// Show or hide the Panels menu in the bottom bar.
+    PanelsMenuToggled,
+    /// Hide the Panels menu (a click outside it).
+    PanelsMenuClosed,
 
     // ---- Logbook drawer ----
     LogbookCallPrefixChanged(String),

@@ -171,6 +171,8 @@ pub struct App {
     /// — operators should always land in Operating after a restart.
     pub(super) current_view: ViewKind,
 
+    /// Whether the bottom bar's Panels menu is showing.
+    pub(super) panels_menu_open: bool,
     /// The QSL tab's floating panels.
     pub(super) qsl_panels: Panels,
     /// The Logbook tab's floating panels.
@@ -265,6 +267,7 @@ impl App {
             logbook_search: LogbookSearchState::default(),
             awards_drawer: AwardsDrawerState::default(),
             current_view: ViewKind::default(),
+            panels_menu_open: false,
             qsl_panels: Panels::new(PanelKind::QSL),
             logbook_panels: Panels::new(PanelKind::LOGBOOK),
             last_services_update: None,

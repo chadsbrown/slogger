@@ -224,6 +224,8 @@ fn sample_app() -> App {
     }
     // SLOGGER_PREVIEW_NO_CONDX=1 leaves the CondX panel closed; open, it
     // covers the right-hand end of the Spots table.
+    // SLOGGER_PREVIEW_MENU=1 shows the bottom bar's Panels menu.
+    app.panels_menu_open = std::env::var("SLOGGER_PREVIEW_MENU").is_ok();
     // SLOGGER_PREVIEW_GREYLINE=1 opens the Greyline map, which otherwise
     // stays closed because it covers the lower left of Spots.
     let no_condx = std::env::var("SLOGGER_PREVIEW_NO_CONDX").is_ok();
@@ -251,6 +253,7 @@ fn sample_app() -> App {
             created_at: now,
             updated_at: now,
         });
+        app.station_locations = app.active_location.iter().cloned().collect();
     }
     for kind in super::panels::PanelKind::OPERATING {
         let wanted = match kind {

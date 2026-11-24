@@ -1,6 +1,6 @@
 //! Top-level views. Each view is a self-contained workflow with its own
-//! set of floating panels (see `floating`), selected via the tab bar between the persistent header
-//! strip and the main canvas:
+//! set of floating panels (see `floating`), selected with the tab buttons
+//! in the bottom bar (see `crate::app::view`) or Ctrl+1..3:
 //!
 //! - **Operating** — live: spots, entry, station state.
 //! - **QSL** — confirmation workflow: uploads, fetches, pending QSOs.
@@ -13,12 +13,6 @@ pub(super) mod floating;
 pub(super) mod logbook;
 pub(super) mod operating;
 pub(super) mod qsl;
-
-use iced::widget::{button, container, row, text};
-use iced::{Element, Length};
-
-use super::message::Message;
-use super::theme;
 
 /// Which view is currently selected. Persistent across the App's
 /// lifetime; not saved to disk (we want a fresh app to land in
@@ -57,26 +51,4 @@ impl ViewKind {
             ViewKind::Logbook => "3",
         }
     }
-}
-
-/// Render the top bar: view tabs on the left, UTC clock on the right.
-pub(super) fn tab_bar(current: ViewKind) -> Element<'static, Message> {
-    let mut bar = row![].spacing(4).align_y(iced::Alignment::Center);
-    for v in ViewKind::ALL {
-        bar = bar.push(
-            button(
-                row![
-                    text(v.label()).size(14),
-                    // Plain text, so it takes the tab's own colour.
-                    text(format!("^{}", v.shortcut_digit())).size(theme::LABEL_TEXT),
-                ]
-                .spacing(6)
-                .align_y(iced::Alignment::Center),
-            )
-            .padding([4, 12])
-            .on_press(Message::ViewChanged(*v))
-            .style(theme::frame_tab_style(*v == current)),
-        );
-    }
-    container(bar).padding([0, 4]).width(Length::Fill).into()
 }

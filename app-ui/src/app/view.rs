@@ -1,13 +1,21 @@
-//! Application shell: the tab bar, the selected view's body, and the
-//! persistent bottom status bar. Per-view content lives in `views/`.
+//! Application shell: the selected view's body over the bottom bar, which
+//! holds the view tabs, the Panels menu and the status message. Per-view content lives in `views/`.
 
-use iced::widget::{button, column, container, pick_list, row, text, tooltip};
+use iced::widget::{
+    Space, button, column, container, mouse_area, pick_list, row, stack, text, tooltip,
+};
 use iced::{Element, Length};
 
 use super::message::Message;
 use super::state::App;
 use super::theme;
 use super::types::StationOption;
+use super::views::ViewKind;
+
+/// Space between the window edge and its contents.
+const WINDOW_PADDING: f32 = 8.0;
+/// Roughly how tall the bottom bar is: what the Panels menu clears.
+const BAR_HEIGHT: f32 = 32.0;
 
 impl App {
     pub fn theme(&self) -> iced::Theme {
@@ -29,20 +37,42 @@ impl App {
             return container(text("opening database…")).padding(20).into();
         }
 
-        let tabs = super::views::tab_bar(self.current_view);
         let view_body: Element<'_, Message> = match self.current_view {
-            super::views::ViewKind::Operating => super::views::operating::view(self),
-            super::views::ViewKind::Qsl => super::views::qsl::view(self),
-            super::views::ViewKind::Logbook => super::views::logbook::view(self),
+            ViewKind::Operating => super::views::operating::view(self),
+            ViewKind::Qsl => super::views::qsl::view(self),
+            ViewKind::Logbook => super::views::logbook::view(self),
         };
 
-        let body = column![tabs, view_body, self.status_bar()].spacing(6);
+        let body = column![view_body, self.status_bar()].spacing(6);
         let main: Element<'_, Message> = container(body)
-            .padding(8)
+            .padding(WINDOW_PADDING)
             .width(Length::Fill)
             .height(Length::Fill)
             .style(theme::canvas_style)
             .into();
+        // The Panels menu rises from its button at the left of the bottom
+        // bar. A click anywhere else puts it away.
+        let main: Element<'_, Message> = if self.panels_menu_open {
+            let panels = match self.current_view {
+                ViewKind::Operating => &self.panels,
+                ViewKind::Qsl => &self.qsl_panels,
+                ViewKind::Logbook => &self.logbook_panels,
+            };
+            let away = mouse_area(Space::new().width(Length::Fill).height(Length::Fill))
+                .on_press(Message::PanelsMenuClosed);
+            let menu = container(self.panels_menu(panels))
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .align_y(iced::alignment::Vertical::Bottom)
+                .padding(iced::Padding {
+                    left: WINDOW_PADDING,
+                    bottom: WINDOW_PADDING + BAR_HEIGHT + 2.0,
+                    ..iced::Padding::ZERO
+                });
+            stack![main, away, menu].into()
+        } else {
+            main
+        };
         // The theme editor docks beside the UI rather than covering it,
         // so the theme being edited can be seen in use.
         let main: Element<'_, Message> = match &self.theme_editor {
@@ -57,10 +87,55 @@ impl App {
         }
     }
 
-    /// Persistent bottom status bar. Left: the station selector with its
-    /// Edit / New buttons and the global status message. Centre: the UTC
-    /// clock. Right: text size and theme. Until the first station location
-    /// exists the selector is replaced by one prominent "Create station
+    /// The station location in use, with Edit and New. It lives in a QSL
+    /// panel because it is rarely changed. Until the first location
+    /// exists the bottom bar also offers to create one.
+    pub(super) fn station_location_pane(&self) -> Element<'_, Message> {
+        if self.station_locations.is_empty() {
+            return column![
+                theme::label("No station location yet. QSOs are logged as made from one."),
+                button(text("Create station location").size(13))
+                    .padding([2, 10])
+                    .on_press(Message::NewStationPressed)
+                    .style(button::primary),
+            ]
+            .spacing(8)
+            .into();
+        }
+        let station_options: Vec<StationOption> =
+            self.station_locations.iter().map(StationOption::from).collect();
+        let active_option: Option<StationOption> =
+            self.active_location.as_ref().map(StationOption::from);
+        let small_button = |caption: &'static str, msg: Option<Message>| {
+            button(text(caption).size(13))
+                .padding([2, 8])
+                .on_press_maybe(msg)
+                .style(theme::tab_style(false))
+        };
+        column![
+            theme::label("QSOS ARE LOGGED FROM"),
+            pick_list(station_options, active_option, Message::StationLocationSelected)
+                .placeholder("(none)")
+                .text_size(13)
+                .padding([2, 8])
+                .width(Length::Fill),
+            row![
+                small_button(
+                    "Edit",
+                    self.active_location.as_ref().map(|_| Message::EditStationPressed),
+                ),
+                small_button("New", Some(Message::NewStationPressed)),
+            ]
+            .spacing(4),
+        ]
+        .spacing(6)
+        .into()
+    }
+
+    /// The bottom bar, the only fixed strip in the window. Left: the
+    /// Panels menu button, the view tabs and the status message. Centre:
+    /// the UTC clock. Right: text size and theme. Until the first station
+    /// location exists there is also one prominent "Create station
     /// location" button, so first-run setup is obvious.
     fn status_bar(&self) -> Element<'_, Message> {
         let small_button = |caption: &'static str, msg: Message| {
@@ -70,9 +145,30 @@ impl App {
                 .style(theme::tab_style(false))
         };
 
-        let mut left = row![theme::label("STATION")]
-            .spacing(10)
-            .align_y(iced::Alignment::Center);
+        let mut left = row![
+            button(text("Panels ▴").size(13))
+                .padding([2, 8])
+                .on_press(Message::PanelsMenuToggled)
+                .style(theme::tab_style(self.panels_menu_open)),
+        ]
+        .spacing(4)
+        .align_y(iced::Alignment::Center);
+        for view in ViewKind::ALL {
+            left = left.push(
+                button(
+                    row![
+                        text(view.label()).size(13),
+                        // Plain text, so it takes the tab's own colour.
+                        text(format!("^{}", view.shortcut_digit())).size(theme::LABEL_TEXT),
+                    ]
+                    .spacing(4)
+                    .align_y(iced::Alignment::Center),
+                )
+                .padding([2, 8])
+                .on_press(Message::ViewChanged(*view))
+                .style(theme::tab_style(*view == self.current_view)),
+            );
+        }
         if self.station_locations.is_empty() {
             left = left.push(
                 button(text("Create station location").size(13))
@@ -80,40 +176,8 @@ impl App {
                     .on_press(Message::NewStationPressed)
                     .style(button::primary),
             );
-        } else {
-            let station_options: Vec<StationOption> = self
-                .station_locations
-                .iter()
-                .map(StationOption::from)
-                .collect();
-            let active_option: Option<StationOption> =
-                self.active_location.as_ref().map(StationOption::from);
-            let edit = button(text("Edit").size(13))
-                .padding([2, 8])
-                .on_press_maybe(
-                    self.active_location
-                        .as_ref()
-                        .map(|_| Message::EditStationPressed),
-                )
-                .style(theme::tab_style(false));
-            left = left.push(
-                row![
-                    pick_list(
-                        station_options,
-                        active_option,
-                        Message::StationLocationSelected,
-                    )
-                    .placeholder("(none)")
-                    .text_size(13)
-                    .padding([2, 8])
-                    .width(Length::Fixed(220.0)),
-                    edit,
-                    small_button("New", Message::NewStationPressed),
-                ]
-                .spacing(4)
-                .align_y(iced::Alignment::Center),
-            );
         }
+        left = left.push(Space::new().width(6));
         // One line, clipped when it runs into the clock; hovering shows
         // the whole message.
         // Informational messages and notices expire; the clock's tick
@@ -148,7 +212,7 @@ impl App {
         );
 
         let clock = row![
-            text(chrono::Utc::now().format("%Y-%m-%d  %H:%M:%S").to_string())
+            text(chrono::Utc::now().format("%H:%M:%S").to_string())
                 .size(14)
                 .font(theme::MONO),
             theme::label("UTC"),
@@ -157,7 +221,6 @@ impl App {
         .align_y(iced::Alignment::Center);
 
         let right = row![
-            theme::label(format!("TEXT {:.0}%", self.font_scale * 100.0)),
             small_button("A−", Message::FontScaleDown),
             small_button("A+", Message::FontScaleUp),
             theme::label("THEME"),
@@ -173,17 +236,11 @@ impl App {
         .spacing(6)
         .align_y(iced::Alignment::Center);
 
-        // Left and right get equal shares so the clock sits at the true
-        // centre of the window whatever their contents.
-        let content = row![
-            container(left).width(Length::FillPortion(1)),
-            clock,
-            container(right)
-                .width(Length::FillPortion(1))
-                .align_x(iced::alignment::Horizontal::Right),
-        ]
-        .spacing(10)
-        .align_y(iced::Alignment::Center);
+        // The message gets all the width the controls don't need; the
+        // clock sits with the controls on the right.
+        let content = row![container(left).width(Length::Fill), clock, right]
+            .spacing(16)
+            .align_y(iced::Alignment::Center);
 
         container(content)
             .padding([4, 8])

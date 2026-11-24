@@ -1,8 +1,11 @@
 //! Drawing for floating panels, shared by every tab. The geometry and
 //! stacking live in [`crate::app::panels`]; this turns one tab's
-//! [`Panels`] into its panel bar and canvas.
+//! [`Panels`] into its canvas and its entry in the bottom bar's Panels
+//! menu.
 
-use iced::widget::{Space, Stack, button, column, container, mouse_area, pin, responsive, row, stack, text};
+use iced::widget::{
+    Space, Stack, button, column, container, mouse_area, pin, responsive, row, rule, stack, text,
+};
 use iced::{Element, Length, Point, Size, mouse};
 
 use crate::app::message::Message;
@@ -10,42 +13,48 @@ use crate::app::panels::{DragMode, PanelKind, Panels};
 use crate::app::state::App;
 use crate::app::theme::{self, LABEL_TEXT, label, muted};
 
-/// A tab made of floating panels: its panel bar above its canvas.
+/// A tab made of floating panels: they have the whole of the tab. Panels
+/// are opened and closed from the Panels menu in the bottom bar.
 pub(in crate::app) fn view<'a>(app: &'a App, panels: &'a Panels) -> Element<'a, Message> {
     // `responsive` hands us the canvas size, which the panels need to turn
     // their fractional geometry into pixels.
-    let canvas = responsive(move |size| app.panel_canvas(panels, size));
-    column![app.panel_bar(panels), canvas]
-        .spacing(6)
-        .into()
+    responsive(move |size| app.panel_canvas(panels, size)).into()
 }
 
 /// Gap left around each panel so neighbours don't share a border.
 const PANEL_INSET: f32 = 3.0;
 
+/// Width of the Panels menu.
+const MENU_WIDTH: f32 = 200.0;
+
 impl App {
-    /// One toggle per panel (lit when open) plus "Reset layout". This is
-    /// where a closed panel is brought back.
-    fn panel_bar<'a>(&'a self, panels: &'a Panels) -> Element<'a, Message> {
-        // Plain text: this bar sits on the window frame, not on a pane.
-        let mut bar = row![text("PANELS").size(LABEL_TEXT)]
-            .spacing(4)
-            .align_y(iced::Alignment::Center);
+    /// The Panels menu: one entry per panel of the tab being shown (lit
+    /// when open), then "Reset layout". This is where a closed panel is
+    /// brought back. It stays up while panels are switched on and off.
+    pub(in crate::app) fn panels_menu<'a>(&'a self, panels: &'a Panels) -> Element<'a, Message> {
+        let entry = |caption: &'static str, lit: bool, message: Message| {
+            button(text(caption).size(13))
+                .padding([3, 10])
+                .width(Length::Fill)
+                .on_press(message)
+                .style(theme::tab_style(lit))
+        };
+        let mut menu = column![].spacing(2);
         for kind in panels.kinds() {
-            bar = bar.push(
-                button(text(kind.title()).size(12))
-                    .padding([2, 10])
-                    .on_press(Message::PanelToggled(*kind))
-                    .style(theme::frame_toggle_style(panels.is_open(*kind))),
-            );
+            menu = menu.push(entry(
+                kind.title(),
+                panels.is_open(*kind),
+                Message::PanelToggled(*kind),
+            ));
         }
-        bar = bar.push(Space::new().width(Length::Fill)).push(
-            button(text("Reset layout").size(12))
-                .padding([2, 10])
-                .on_press(Message::PanelsReset)
-                .style(theme::frame_toggle_style(false)),
-        );
-        container(bar.wrap()).padding([0, 4]).width(Length::Fill).into()
+        menu = menu
+            .push(rule::horizontal(1))
+            .push(entry("Reset layout", false, Message::PanelsReset));
+        container(menu)
+            .padding(6)
+            .width(Length::Fixed(MENU_WIDTH))
+            .style(theme::panel_style)
+            .into()
     }
 
     /// A tab's canvas: every open panel pinned at its own position,
@@ -53,7 +62,7 @@ impl App {
     fn panel_canvas<'a>(&'a self, panels: &'a Panels, canvas: Size) -> Element<'a, Message> {
         let mut layers = Stack::new().width(Length::Fill).height(Length::Fill).clip(true);
         let backdrop: Element<'_, Message> = if panels.open().next().is_none() {
-            container(label("No panels open — choose one from the PANELS bar above."))
+            container(label("No panels open — choose one from the Panels menu in the bottom bar."))
                 .center(Length::Fill)
                 .style(theme::canvas_style)
                 .into()
@@ -154,6 +163,7 @@ impl App {
             PanelKind::QslServices => super::qsl::view_services_pane(self),
             PanelKind::QslPending => super::qsl::view_pending_pane(self),
             PanelKind::QslConfirmations => super::qsl::view_confirmations_pane(self),
+            PanelKind::QslStation => self.station_location_pane(),
             PanelKind::LogSearch => self.view_logbook_search_pane(),
             PanelKind::LogResults => self.view_logbook_grid_pane(),
             PanelKind::LogDetail => self.view_logbook_detail_pane(),

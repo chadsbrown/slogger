@@ -40,6 +40,7 @@ pub enum PanelKind {
     QslServices,
     QslPending,
     QslConfirmations,
+    QslStation,
     // Logbook tab
     LogSearch,
     LogResults,
@@ -66,6 +67,7 @@ impl PanelKind {
         PanelKind::QslServices,
         PanelKind::QslPending,
         PanelKind::QslConfirmations,
+        PanelKind::QslStation,
     ];
 
     /// The Logbook tab's panels.
@@ -89,6 +91,7 @@ impl PanelKind {
             PanelKind::QslServices => "Services",
             PanelKind::QslPending => "Pending uploads",
             PanelKind::QslConfirmations => "Recent confirmations",
+            PanelKind::QslStation => "Station location",
             PanelKind::LogSearch => "Search",
             PanelKind::LogResults => "Results",
             PanelKind::LogDetail => "Detail",
@@ -116,8 +119,9 @@ impl PanelKind {
     /// of Spots (the comment column), clear of the Entry form. Greyline
     /// starts closed too, and opens over the lower left of Spots.
     ///
-    /// QSL stacks its three panels full width: Services, then Pending
-    /// uploads (the largest), then Recent confirmations. Logbook has
+    /// QSL stacks its panels: Services with Station location beside it,
+    /// then Pending uploads (the largest) and Recent confirmations, both
+    /// full width. Logbook has
     /// Search, Results and Detail down the left and Awards over Tools on
     /// the right. Both match the fixed layouts those tabs had before
     /// their panels floated.
@@ -130,9 +134,10 @@ impl PanelKind {
             PanelKind::Recent => (0.00, 0.68, 1.00, 0.32),
             PanelKind::CondX => (0.36, 0.00, 0.24, 0.42),
             PanelKind::Greyline => (0.00, 0.26, 0.42, 0.42),
-            PanelKind::QslServices => (0.00, 0.00, 1.00, 0.30),
+            PanelKind::QslServices => (0.00, 0.00, 0.72, 0.30),
             PanelKind::QslPending => (0.00, 0.30, 1.00, 0.38),
             PanelKind::QslConfirmations => (0.00, 0.68, 1.00, 0.32),
+            PanelKind::QslStation => (0.72, 0.00, 0.28, 0.30),
             PanelKind::LogSearch => (0.00, 0.00, 0.65, 0.29),
             PanelKind::LogResults => (0.00, 0.29, 0.65, 0.37),
             PanelKind::LogDetail => (0.00, 0.66, 0.65, 0.34),
@@ -154,6 +159,7 @@ impl PanelKind {
             | PanelKind::QslServices
             | PanelKind::QslPending
             | PanelKind::QslConfirmations
+            | PanelKind::QslStation
             | PanelKind::LogSearch
             | PanelKind::LogResults
             | PanelKind::LogDetail
@@ -588,7 +594,7 @@ mod tests {
 
     /// A layout saved before CondX existed lists only the original five
     /// panels. It must keep their arrangement, gain CondX closed at its
-    /// default spot, and let the operator open it from the panel bar.
+    /// default spot, and let the operator open it from the Panels menu.
     #[test]
     fn layout_saved_before_condx_gains_it_closed_and_openable() {
         let old: Vec<Panel> = Panels::new(PanelKind::OPERATING)

@@ -1665,56 +1665,6 @@ pub(super) fn rig_style(active: bool) -> impl Fn(&Theme, button::Status) -> butt
     }
 }
 
-/// A view tab in the top bar, which sits on the window frame.
-pub(super) fn frame_tab_style(active: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
-    move |theme: &Theme, status| {
-        let hues = hues(theme);
-        let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
-        let ink = ink_toward(theme.palette().text, hues.chrome);
-        button::Style {
-            background: if active {
-                Some(hues.bar.into())
-            } else if hovered {
-                Some(Color { a: 0.15, ..ink }.into())
-            } else {
-                None
-            },
-            text_color: if active {
-                hues.bar_text
-            } else {
-                Color { a: if hovered { 1.0 } else { 0.8 }, ..ink }
-            },
-            border: Border {
-                radius: 4.0.into(),
-                ..Border::default()
-            },
-            ..button::Style::default()
-        }
-    }
-}
-
-/// A toggle on the window frame for something that is open or shut (a
-/// panel): open is a raised button, shut is plain text.
-pub(super) fn frame_toggle_style(open: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
-    move |theme: &Theme, status| {
-        if open {
-            return push_button(theme, status);
-        }
-        let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
-        let ink = ink_toward(theme.palette().text, hues(theme).chrome);
-        button::Style {
-            background: hovered.then(|| Color { a: 0.15, ..ink }.into()),
-            text_color: Color { a: if hovered { 1.0 } else { 0.7 }, ..ink },
-            border: Border {
-                color: Color { a: 0.35, ..ink },
-                width: 1.0,
-                radius: 3.0.into(),
-            },
-            ..button::Style::default()
-        }
-    }
-}
-
 /// Formats a frequency the way a rig display does: `14.074.00`
 /// (MHz . kHz . tens-of-Hz).
 pub(super) fn format_rig_freq(hz: u64) -> String {

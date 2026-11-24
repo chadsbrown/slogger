@@ -171,7 +171,7 @@
 #
 # Polls N0NBH's feed at hamqsl.com for SFI, sunspots, A/K indices, X-ray,
 # geomagnetic field, signal noise and per-band day/night ratings, shown in
-# the Operating view's CondX panel (open it from the PANELS bar). Off by
+# the Operating view's CondX panel (open it from the Panels menu in the bottom bar). Off by
 # default: with enabled = false slogger never contacts hamqsl.com. A failed
 # fetch is logged and retried at the next interval.
 
