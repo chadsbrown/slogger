@@ -146,9 +146,18 @@ pub async fn spawn_spot_feed(config: &SpotFeedConfig) -> Result<mpsc::Receiver<S
         builder = builder.add_source(dxfeed::source::supervisor::SourceConfig::Cluster(cluster));
     }
 
+    let mut modes = ModeRule::default();
     if let Some(path) = &config.filter_path {
         let filter = load_filter_file(path)?;
-        tracing::info!(path = %path.display(), "spot feed: applying filter");
+        modes = ModeRule {
+            allow: filter.rf.mode_allow.iter().copied().collect(),
+            deny: filter.rf.mode_deny.iter().copied().collect(),
+        };
+        tracing::info!(
+            path = %path.display(),
+            modes = %modes.describe(),
+            "spot feed: applying filter"
+        );
         builder = builder.set_filter(filter);
     }
 
@@ -158,7 +167,7 @@ pub async fn spawn_spot_feed(config: &SpotFeedConfig) -> Result<mpsc::Receiver<S
 
     let (tx, rx) = mpsc::channel::<SpotEvent>(CHANNEL_DEPTH);
     tokio::spawn(async move {
-        let mut tracker = SpotTracker::default();
+        let mut tracker = SpotTracker { modes, ..SpotTracker::default() };
         while let Some(event) = feed.next_event().await {
             for translated in tracker.translate(event) {
                 if tx.send(translated).await.is_err() {
@@ -186,6 +195,37 @@ pub async fn spawn_spot_feed(config: &SpotFeedConfig) -> Result<mpsc::Receiver<S
 struct SpotTracker {
     /// Call and frequency last sent to the panel for each live key.
     sent: HashMap<dxfeed::model::SpotKey, (String, u64)>,
+    /// The filter file's mode rule, checked again here. dxfeed applies
+    /// it too; a spot that reaches this point against the rule is
+    /// dropped and logged, so the panel never shows one.
+    modes: ModeRule,
+}
+
+/// The modes a filter file lets through.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct ModeRule {
+    /// Empty means every mode not denied.
+    allow: Vec<dxfeed::domain::DxMode>,
+    deny: Vec<dxfeed::domain::DxMode>,
+}
+
+impl ModeRule {
+    fn permits(&self, mode: dxfeed::domain::DxMode) -> bool {
+        !self.deny.contains(&mode) && (self.allow.is_empty() || self.allow.contains(&mode))
+    }
+
+    /// For the log and the spot tooltip: "CW only", "any mode", ...
+    fn describe(&self) -> String {
+        let list = |modes: &[dxfeed::domain::DxMode]| {
+            modes.iter().map(|m| format!("{m:?}")).collect::<Vec<_>>().join(", ")
+        };
+        match (self.allow.is_empty(), self.deny.is_empty()) {
+            (true, true) => "any mode".to_string(),
+            (false, true) => format!("{} only", list(&self.allow)),
+            (true, false) => format!("not {}", list(&self.deny)),
+            (false, false) => format!("{} only, not {}", list(&self.allow), list(&self.deny)),
+        }
+    }
 }
 
 impl SpotTracker {
@@ -196,7 +236,21 @@ impl SpotTracker {
                 let key = spot_event.spot.spot_key.clone();
                 match spot_event.kind {
                     SpotEventKind::New | SpotEventKind::Update => {
-                        let origin = Some(describe_origin(&spot_event.spot));
+                        if !self.modes.permits(spot_event.spot.mode) {
+                            tracing::warn!(
+                                call = %spot_event.spot.dx_call,
+                                freq_hz = spot_event.spot.freq_hz,
+                                mode = ?spot_event.spot.mode,
+                                filter = %self.modes.describe(),
+                                "dxfeed sent a spot the filter's mode rule excludes; dropped"
+                            );
+                            return Vec::new();
+                        }
+                        let origin = Some(format!(
+                            "{}  ·  filter: {}",
+                            describe_origin(&spot_event.spot),
+                            self.modes.describe()
+                        ));
                         let spot = Spot {
                             origin,
                             call: spot_event.spot.dx_call,
@@ -289,6 +343,36 @@ fn dxmode_to_str(mode: dxfeed::domain::DxMode) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_spot_outside_the_filters_modes_is_never_shown() {
+        use dxfeed::domain::{Band, DxMode};
+        use dxfeed::model::SpotEventKind;
+        let cw_only = ModeRule { allow: vec![DxMode::CW], deny: vec![] };
+        assert_eq!(cw_only.describe(), "CW only");
+        assert_eq!(ModeRule::default().describe(), "any mode");
+        assert!(ModeRule::default().permits(DxMode::SSB));
+
+        // The test events are CW: shown under a CW-only rule, and under
+        // an SSB-only one neither shown nor remembered.
+        let mut t = SpotTracker { modes: cw_only, ..SpotTracker::default() };
+        let shown =
+            t.translate(spot_event("K1ABC", Band::B20, 14_025_000, 14_025_000, SpotEventKind::New));
+        assert_eq!(shown.len(), 1);
+        let SpotEvent::Spot(spot) = &shown[0] else { panic!("expected a spot") };
+        assert!(spot.origin.as_deref().unwrap().ends_with("filter: CW only"), "{:?}", spot.origin);
+
+        let ssb_only = ModeRule { allow: vec![DxMode::SSB], deny: vec![] };
+        let mut t = SpotTracker { modes: ssb_only, ..SpotTracker::default() };
+        assert!(
+            t.translate(spot_event("K1ABC", Band::B20, 14_025_000, 14_025_000, SpotEventKind::New))
+                .is_empty()
+        );
+        assert!(
+            t.translate(spot_event("K1ABC", Band::B20, 14_025_000, 14_025_000, SpotEventKind::Withdraw))
+                .is_empty()
+        );
+    }
 
     #[test]
     fn the_shipped_cw_filter_has_no_unknown_keys() {
