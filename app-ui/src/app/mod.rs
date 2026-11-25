@@ -16,6 +16,7 @@ mod pota;
 #[cfg(test)]
 mod preview;
 mod services;
+mod spot_filter;
 mod spots;
 mod status;
 mod state;

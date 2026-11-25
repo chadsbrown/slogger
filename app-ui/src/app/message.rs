@@ -27,6 +27,12 @@ pub enum Message {
     AdifPathChanged(String),
     ImportPressed,
     ImportFinished(Result<ImportSummary, String>),
+    /// A filter was picked in the Spots panel.
+    SpotFilterPicked(super::spot_filter::FilterChoice),
+    /// Re-read the filter in force (after editing its file).
+    SpotFilterReload,
+    /// The filter list was opened: look in the folder again.
+    SpotFiltersOpened,
     BackupPressed,
     BackupFinished(Result<super::backup::BackupDone, String>),
     ServicesUpdatePressed,

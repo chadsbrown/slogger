@@ -381,6 +381,9 @@ pub struct DxClusterConfig {
     /// filtered server-side (in dxfeed's pipeline) before reaching the
     /// UI. See dxfeed docs for the schema.
     pub filter_file: Option<PathBuf>,
+    /// Folder of filter files offered in the Spots panel's filter list.
+    /// Default: `spot-filters` beside config.toml.
+    pub filter_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -526,6 +529,7 @@ mod tests {
                 my_callsign: s(),
                 sources: vec![ClusterSourceConfig { host: "x".into(), port: 1 }],
                 filter_file: p(),
+                filter_dir: p(),
             },
             wsjtx: WsjtxConfig { enabled: true, bind_addr: "x".into() },
             rigs: vec![RigConfig {

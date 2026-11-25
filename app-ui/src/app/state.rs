@@ -94,6 +94,13 @@ pub struct App {
     pub(super) spots_active: bool,
     pub(super) spots: VecDeque<Spot>,
     pub(super) spots_status: Option<String>,
+    pub(super) filter_control: Option<spot_feed::FilterControl>,
+    /// Whether cty.dat was found: the filter's geography rules need it.
+    pub(super) cty_loaded: bool,
+    /// The spot filter in force (`None` is no filter).
+    pub(super) spot_filter: Option<std::path::PathBuf>,
+    /// The filter list as last read from the filter folder.
+    pub(super) spot_filters: Vec<super::spot_filter::FilterChoice>,
     pub(super) spots_needed_only: bool,
     /// Column sort chosen in the Spots table; `None` is the default
     /// order (newest spot first, stable under re-reports).
@@ -241,6 +248,10 @@ impl App {
             spots_active: false,
             spots: VecDeque::with_capacity(SPOT_HISTORY_LIMIT),
             spots_status: None,
+            filter_control: None,
+            cty_loaded: false,
+            spot_filter: None,
+            spot_filters: vec![super::spot_filter::FilterChoice::none()],
             spots_needed_only: false,
             spots_sort: None,
             pota_on: false,

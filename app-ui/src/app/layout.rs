@@ -36,6 +36,11 @@ struct LayoutFile {
     /// first presses the POTA button; `[pota] enabled` decides until then.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pota: Option<bool>,
+    /// The spot filter chosen in the Spots panel: a path, or "" for no
+    /// filter. Absent until a choice is made; `[dxcluster] filter_file`
+    /// decides until then.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    spot_filter: Option<String>,
 }
 
 /// Everything the layout file remembers.
@@ -47,6 +52,7 @@ pub struct SavedUi {
     pub font_scale: Option<f32>,
     pub theme: Option<String>,
     pub pota: Option<bool>,
+    pub spot_filter: Option<String>,
 }
 
 /// Resolves the on-disk path for the saved layout. Returns None if the
@@ -78,6 +84,7 @@ fn parse_layout(contents: &str) -> Option<SavedUi> {
         font_scale: file.font_scale,
         theme: file.theme,
         pota: file.pota,
+        spot_filter: file.spot_filter,
     })
 }
 
@@ -96,6 +103,7 @@ pub(super) async fn save_layout(ui: SavedUi) {
         font_scale: ui.font_scale,
         theme: ui.theme,
         pota: ui.pota,
+        spot_filter: ui.spot_filter,
     };
     let json = match serde_json::to_string_pretty(&file) {
         Ok(s) => s,
@@ -130,6 +138,7 @@ mod tests {
             font_scale: Some(1.2),
             theme: Some("Nord".into()),
             pota: Some(true),
+            spot_filter: Some(String::new()),
         };
         let json = serde_json::to_string_pretty(&file).unwrap();
         assert_eq!(
@@ -141,6 +150,7 @@ mod tests {
                 font_scale: Some(1.2),
                 theme: Some("Nord".into()),
                 pota: Some(true),
+                spot_filter: Some(String::new()),
             })
         );
     }
@@ -151,6 +161,7 @@ mod tests {
         assert_eq!(saved.font_scale, None);
         assert_eq!(saved.theme, None);
         assert_eq!(saved.pota, None);
+        assert_eq!(saved.spot_filter, None);
     }
 
     /// A file written before the CondX panel existed still loads, and the

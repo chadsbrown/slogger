@@ -166,7 +166,13 @@
 # only, watch lists, by continent or zone, and how to combine them); the
 # files themselves are in docs/spot-filters/. Continent, zone and entity
 # rules need cty.dat in slogger's data folder.
-# filter_file = "/home/me/.config/slogger/spot-filter.json"
+#
+# Filters are switched from the Filter list in the Spots panel, without
+# a restart. The list offers the .json files in filter_dir; slogger
+# remembers the one you pick. filter_file is only the filter to start
+# with before you have ever picked one.
+# filter_dir = "/home/me/.config/slogger/spot-filters"   # this is the default
+# filter_file = "/home/me/.config/slogger/spot-filters/cw.json"
 
 
 # ============================================================

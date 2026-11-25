@@ -8,29 +8,64 @@ that runs sample spots through the same filter code slogger uses.
 
 ## Setting it up
 
-Point `config.toml` at your file, inside the `[dxcluster]` section, and
-restart slogger. The file is read once, at startup.
+Put your filter files in a folder named `spot-filters` beside
+`config.toml`, one `.json` file per filter:
+
+| | Filter folder |
+| --- | --- |
+| Windows | `%APPDATA%\slogger\spot-filters` |
+| Linux | `~/.config/slogger/spot-filters` |
+
+Create the folder if it is not there, and copy in whichever of the
+example files you want. To keep them somewhere else, set `filter_dir` in
+the `[dxcluster]` section of `config.toml`.
+
+### Choosing a filter
+
+The Spots panel has a **Filter** list at the top. It offers "No filter"
+and every file in the folder, by file name without the `.json`. Pick one
+and it takes effect straight away, with no restart:
+
+- The cluster spots on screen are cleared, since they were chosen by the
+  old filter, and slogger reconnects to the cluster with the new one. The
+  panel refills as spots arrive. POTA spots stay.
+- slogger remembers the choice and starts with it next time.
+- The list is read from the folder each time you open it, so a file you
+  have just copied in appears without a restart.
+
+**Reload** re-reads the filter in force. Use it after editing that file.
+
+If the file you pick is not a valid filter, the bottom bar says what is
+wrong (with the line and column for a JSON mistake) and the filter you
+had stays in force.
+
+### The filter slogger starts with
+
+The first time, before you have ever used the list, slogger starts with
+the file named by `filter_file` in `config.toml`, or with no filter if
+that is not set:
 
 ```toml
 [dxcluster]
-filter_file = 'C:\Users\you\AppData\Roaming\slogger\spot-filter.json'
+filter_file = 'C:\Users\you\AppData\Roaming\slogger\spot-filters\cw.json'
 ```
 
 On Windows use single quotes, so the backslashes are taken literally.
+Once you have picked from the list, that choice is used instead.
 
-To check that it took effect:
+If the filter slogger starts with cannot be used (the file has gone, or
+is not valid), slogger shows **no cluster spots** and a warning in the
+bottom bar, until you pick another filter or fix the file and press
+Reload. It never falls back to showing everything.
 
-- The summary line at the top of the Spots panel ends with
-  `filter: <file name>`, or `no filter` if the setting was not read.
+### Checking what is in force
+
+- The Filter list shows the current filter.
 - Hovering a cluster spot shows the mode rule in force at the end of the
-  tooltip, such as `filter: CW only (C:\...\spot-filter.json)`.
+  tooltip, such as `filter: CW only (C:\...\cw.json)`.
 - A key slogger does not recognise, in `config.toml` or in the filter
-  file, is reported as a warning in the bottom bar at startup. A
-  misspelt key is otherwise ignored, which looks exactly like a filter
-  that does nothing.
-- If the file is missing or is not valid JSON, the cluster feed does not
-  start at all, and the log says why. It never falls back to showing
-  everything.
+  file, is reported as a warning in the bottom bar. A misspelt key is
+  otherwise ignored, which looks exactly like a filter that does nothing.
 
 The filter applies to cluster spots only. POTA spots have their own
 `bands` and `modes` settings in the `[pota]` section of `config.toml`.
@@ -72,8 +107,8 @@ Values you will need:
 | Zones | plain numbers: `[14, 15]` |
 | Frequencies | whole hertz, as a `[low, high]` pair, both ends included: `[14000000, 14030000]` |
 
-Spelling and capitals matter: `"20m"` or `"cw"` is an error and the feed
-will not start.
+Spelling and capitals matter: `"20m"` or `"cw"` is an error, and the
+file is refused.
 
 ### Where a spot's mode comes from
 
@@ -621,7 +656,7 @@ the US. Change both `"NA"` to your own continent.
 
 1. Start with the smallest file that does the main thing you want,
    usually example 1 or 4.
-2. Restart slogger and watch the Spots panel for a while.
+2. Choose it in the Filter list and watch the Spots panel for a while.
 3. When something appears that you don't want, find which example hides
    that kind of spot and copy its section in. If your file already has
    that section (`"rf"`, say), add the new line inside the existing one;
@@ -629,10 +664,12 @@ the US. Change both `"NA"` to your own continent.
 4. If spots you expected go missing, remove sections one at a time. Allow
    lists and `correlation` are the usual cause.
 
+After each edit, press Reload.
+
 JSON is strict about punctuation. Every key and every text value is in
 double quotes, items are separated by commas, and there is no comma
-after the last item in a list or section. If slogger reports a parse
-error at startup, it gives the line and column.
+after the last item in a list or section. When slogger refuses a file,
+the message gives the line and column.
 
 ## Parts of the filter format that do not work in slogger
 

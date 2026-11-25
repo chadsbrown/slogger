@@ -88,6 +88,15 @@ fn sample_app() -> App {
         origin: Some("cluster: W3LPL (skimmer)  ·  1 report  ·  dxfeed mode CW".into()),
     };
     app.spots_active = true;
+    app.filter_control = Some(spot_feed::FilterControl::detached());
+    app.spot_filter = Some(std::path::PathBuf::from("/filters/cw-no-ft8.json"));
+    app.spot_filters = ["contest-weekend", "cw-no-ft8", "dx-evening"]
+        .iter()
+        .map(|name| {
+            super::spot_filter::FilterChoice::for_path(std::path::Path::new(&format!("/filters/{name}.json")))
+        })
+        .collect();
+    app.spot_filters.insert(0, super::spot_filter::FilterChoice::none());
     app.spots = [
         spot("JA1NUT", 14025.0, "CW", "599 TU", 1),
         spot("ZS6CCY", 21074.0, "FT8", "-12 dB", 2),

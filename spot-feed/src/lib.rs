@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use thiserror::Error;
@@ -40,6 +41,11 @@ pub enum SpotEvent {
     SourceStatus { source_id: String, status: String },
     /// Soft error from the feed. Don't crash the adapter on these.
     Error { message: String },
+    /// The filter was switched (see [`FilterControl`]). Every spot sent
+    /// before this was let through by the old filter and should be
+    /// discarded; spots sent after it passed the new one. `filter` is
+    /// the file now in force, `None` for no filter.
+    FilterChanged { filter: Option<PathBuf> },
 }
 
 #[derive(Debug, Clone)]
@@ -70,6 +76,21 @@ pub enum FeedError {
 
     #[error("filter file parse error at {path}: {error}")]
     FilterParse { path: PathBuf, error: String },
+
+    #[error("filter file {path} is not usable: {error}")]
+    FilterInvalid { path: PathBuf, error: String },
+
+    #[error("the spot feed is not running")]
+    Stopped,
+}
+
+/// Reads a filter file and checks that dxfeed accepts it (its patterns
+/// compile, its ranges are the right way round), without applying it.
+pub fn check_filter_file(path: &Path) -> Result<(), FeedError> {
+    load_filter_file(path)?
+        .validate_and_compile()
+        .map(|_| ())
+        .map_err(|e| FeedError::FilterInvalid { path: path.to_path_buf(), error: e.to_string() })
 }
 
 /// Load + parse a dxfeed filter file. Public so callers can validate
@@ -160,9 +181,9 @@ pub trait EntityLookup: Send + Sync {
 
 /// Adapts an [`EntityLookup`] to what dxfeed's aggregator takes.
 pub fn entity_resolver(
-    lookup: Box<dyn EntityLookup>,
+    lookup: Arc<dyn EntityLookup>,
 ) -> Box<dyn dxfeed::resolver::entity::EntityResolver> {
-    struct Adapter(Box<dyn EntityLookup>);
+    struct Adapter(Arc<dyn EntityLookup>);
     impl dxfeed::resolver::entity::EntityResolver for Adapter {
         fn resolve(&self, callsign: &str) -> Option<dxfeed::resolver::entity::EntityInfo> {
             use dxfeed::domain::Continent;
@@ -204,52 +225,130 @@ pub fn filter_uses_geography(path: &Path) -> bool {
         .is_some_and(|f| f.geo.dx.has_any_filters() || f.geo.spotter.has_any_filters())
 }
 
-/// Starts the cluster feed. `entities` is the country-file lookup for a
-/// filter's `geo` rules; pass `None` when there is no country file.
+/// Switches the running feed's filter. Cheap to clone.
+#[derive(Debug, Clone)]
+pub struct FilterControl {
+    tx: mpsc::UnboundedSender<Option<PathBuf>>,
+}
+
+impl FilterControl {
+    /// A control with no feed behind it, for rendering the UI without
+    /// one; `set_filter` on it reports [`FeedError::Stopped`].
+    pub fn detached() -> Self {
+        Self { tx: mpsc::unbounded_channel().0 }
+    }
+
+    /// Switches to the filter in `path`, or to no filter for `None`.
+    /// Call it with the current path to pick up an edited file.
+    ///
+    /// The file is checked first: if it cannot be read or is not a
+    /// valid filter, this returns the error and the filter in force
+    /// stays. Otherwise the feed reconnects to the cluster with the new
+    /// filter and sends [`SpotEvent::FilterChanged`], then spots that
+    /// pass it. Reconnecting, rather than swapping the filter in place,
+    /// is what guarantees no spot from the old filter survives: dxfeed
+    /// does not re-check or re-send spots it has already let through.
+    pub fn set_filter(&self, path: Option<PathBuf>) -> Result<(), FeedError> {
+        if let Some(path) = &path {
+            check_filter_file(path)?;
+        }
+        self.tx.send(path).map_err(|_| FeedError::Stopped)
+    }
+}
+
+/// What a feed is built from, kept so it can be built again.
+struct FeedSpec {
+    config: SpotFeedConfig,
+    entities: Option<Arc<dyn EntityLookup>>,
+}
+
+impl FeedSpec {
+    fn build(&self, filter_path: Option<&Path>) -> Result<(dxfeed::feed::DxFeed, ModeRule), FeedError> {
+        let mut builder = dxfeed::feed::DxFeedBuilder::new();
+        if let Some(lookup) = &self.entities {
+            builder = builder.entity_resolver(entity_resolver(lookup.clone()));
+        }
+        for (i, src) in self.config.sources.iter().enumerate() {
+            let cluster = dxfeed::source::cluster::ClusterSourceConfig::new(
+                &src.host,
+                src.port,
+                &self.config.my_callsign,
+                dxfeed::model::SourceId(format!("cluster-{i}")),
+            );
+            builder = builder.add_source(dxfeed::source::supervisor::SourceConfig::Cluster(cluster));
+        }
+
+        let mut modes = ModeRule::default();
+        if let Some(path) = filter_path {
+            let filter = load_filter_file(path)?;
+            modes = ModeRule {
+                file: Some(path.display().to_string()),
+                allow: filter.rf.mode_allow.iter().copied().collect(),
+                deny: filter.rf.mode_deny.iter().copied().collect(),
+            };
+            tracing::info!(
+                path = %path.display(),
+                modes = %modes.describe(),
+                "spot feed: applying filter"
+            );
+            builder = builder.set_filter(filter);
+        }
+        let feed = builder.build().map_err(|e| match filter_path {
+            Some(path) => {
+                FeedError::FilterInvalid { path: path.to_path_buf(), error: format!("{e:?}") }
+            }
+            None => FeedError::Build(format!("{e:?}")),
+        })?;
+        Ok((feed, modes))
+    }
+}
+
+/// Starts the cluster feed with the filter in `config.filter_path`.
+/// `entities` is the country-file lookup for a filter's `geo` rules;
+/// pass `None` when there is no country file.
+///
+/// A filter file that cannot be used does not stop the feed and does
+/// not let everything through either: the feed connects and shows no
+/// spots, the returned error says what is wrong with the file, and
+/// [`FilterControl::set_filter`] puts it right (with another file, or
+/// the same one once fixed).
 pub async fn spawn_spot_feed(
     config: &SpotFeedConfig,
-    entities: Option<Box<dyn EntityLookup>>,
-) -> Result<mpsc::Receiver<SpotEvent>, FeedError> {
-    let mut builder = dxfeed::feed::DxFeedBuilder::new();
-    if let Some(lookup) = entities {
-        builder = builder.entity_resolver(entity_resolver(lookup));
-    }
-    for (i, src) in config.sources.iter().enumerate() {
-        let cluster = dxfeed::source::cluster::ClusterSourceConfig::new(
-            &src.host,
-            src.port,
-            &config.my_callsign,
-            dxfeed::model::SourceId(format!("cluster-{i}")),
-        );
-        builder = builder.add_source(dxfeed::source::supervisor::SourceConfig::Cluster(cluster));
-    }
-
-    let mut modes = ModeRule::default();
-    if let Some(path) = &config.filter_path {
-        let filter = load_filter_file(path)?;
-        modes = ModeRule {
-            file: Some(path.display().to_string()),
-            allow: filter.rf.mode_allow.iter().copied().collect(),
-            deny: filter.rf.mode_deny.iter().copied().collect(),
-        };
-        tracing::info!(
-            path = %path.display(),
-            modes = %modes.describe(),
-            "spot feed: applying filter"
-        );
-        builder = builder.set_filter(filter);
-    }
-
-    let mut feed = builder
-        .build()
-        .map_err(|e| FeedError::Build(format!("{e:?}")))?;
+    entities: Option<Arc<dyn EntityLookup>>,
+) -> Result<(mpsc::Receiver<SpotEvent>, FilterControl, Option<FeedError>), FeedError> {
+    let spec = FeedSpec { config: config.clone(), entities };
+    let (mut feed, mut tracker, problem) = match spec.build(config.filter_path.as_deref()) {
+        Ok((feed, modes)) => (feed, SpotTracker { modes, ..SpotTracker::default() }, None),
+        Err(e @ (FeedError::FilterIo { .. } | FeedError::FilterParse { .. } | FeedError::FilterInvalid { .. })) => {
+            let (feed, _) = spec.build(None)?;
+            (feed, SpotTracker { blocked: true, ..SpotTracker::default() }, Some(e))
+        }
+        Err(e) => return Err(e),
+    };
 
     let (tx, rx) = mpsc::channel::<SpotEvent>(CHANNEL_DEPTH);
+    let (control_tx, mut control_rx) = mpsc::unbounded_channel::<Option<PathBuf>>();
     tokio::spawn(async move {
-        let mut tracker = SpotTracker { modes, ..SpotTracker::default() };
-        while let Some(event) = feed.next_event().await {
-            for translated in tracker.translate(event) {
-                if tx.send(translated).await.is_err() {
+        loop {
+            let translated = tokio::select! {
+                event = feed.next_event() => match event {
+                    Some(event) => tracker.translate(event),
+                    None => break,
+                },
+                Some(path) = control_rx.recv() => match spec.build(path.as_deref()) {
+                    Ok((new_feed, modes)) => {
+                        // The old feed goes, with everything it knew.
+                        feed.shutdown();
+                        feed = new_feed;
+                        tracker = SpotTracker { modes, ..SpotTracker::default() };
+                        vec![SpotEvent::FilterChanged { filter: path }]
+                    }
+                    // The file changed between the check and now.
+                    Err(e) => vec![SpotEvent::Error { message: e.to_string() }],
+                },
+            };
+            for event in translated {
+                if tx.send(event).await.is_err() {
                     return; // receiver dropped
                 }
             }
@@ -257,7 +356,7 @@ pub async fn spawn_spot_feed(
         tracing::info!("dxfeed event stream ended");
     });
 
-    Ok(rx)
+    Ok((rx, FilterControl { tx: control_tx }, problem))
 }
 
 /// Translates dxfeed events into panel events.
@@ -278,6 +377,9 @@ struct SpotTracker {
     /// it too; a spot that reaches this point against the rule is
     /// dropped and logged, so the panel never shows one.
     modes: ModeRule,
+    /// Set when the configured filter file could not be used: no spot
+    /// is shown until a usable filter is chosen.
+    blocked: bool,
 }
 
 /// The modes a filter file lets through.
@@ -325,6 +427,9 @@ impl SpotTracker {
                 let key = spot_event.spot.spot_key.clone();
                 match spot_event.kind {
                     SpotEventKind::New | SpotEventKind::Update => {
+                        if self.blocked {
+                            return Vec::new();
+                        }
                         if !self.modes.permits(spot_event.spot.mode) {
                             tracing::warn!(
                                 call = %spot_event.spot.dx_call,

@@ -603,8 +603,17 @@ to `dxcc_id = None`.
 
 ### Spot filter file
 
-Format: dxfeed's `FilterConfigSerde` JSON. Path is configurable via
-`[dxcluster].filter_file`. No UI yet — hand-authored.
+Format: dxfeed's `FilterConfigSerde` JSON, hand-authored; see
+`docs/spot-filters.md`. The Spots panel's Filter list offers the `.json`
+files in `[dxcluster].filter_dir` (default `spot-filters` beside
+config.toml) and switches without a restart: `FilterControl::set_filter`
+checks the file, then the feed task rebuilds the dxfeed feed with it
+(reconnecting, because dxfeed neither re-checks nor re-sends spots it
+has already emitted) and sends `SpotEvent::FilterChanged`, on which the
+panel clears its cluster spots. The choice is saved in `ui-layout.json`;
+`filter_file` is only the filter for a first start. A filter that
+cannot be used at startup shows no cluster spots until another is
+chosen. With cty.dat loaded, `geo` continent/zone/entity rules work.
 
 Example filter (drops everything outside NA + 20m/40m):
 ```json
@@ -662,7 +671,8 @@ doesn't promise things the backend can't deliver yet.
 - **FlexRadio multi-slice** — Flex rigs treated as single-VFO.
 - **Audio routing** (sound card, headphones, mic) is OS responsibility,
   not slogger's. SO2R operators wire it externally.
-- **No spot filter UI** — `[dxcluster].filter_file` is hand-authored JSON.
+- **No spot filter editor** — filters are hand-authored JSON, chosen from
+  a list in the Spots panel.
 - **No bulk undo** — soft_delete is reversible at the DB level (the
   `deleted_at` column) but no `undo_delete` method or undo stack exists.
 - **No live decoder** — slogger doesn't show FT8/RTTY/PSK decodes

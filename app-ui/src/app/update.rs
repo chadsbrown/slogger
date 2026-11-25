@@ -83,25 +83,17 @@ impl App {
                     .collect();
                 // A filter key dxfeed doesn't know is ignored silently,
                 // which looks exactly like a filter that isn't working.
-                if let Some(path) = &bundle.config.dxcluster.filter_file {
-                    // Continent, zone and entity rules need the country
-                    // file; without it an allow list hides every spot.
-                    if !bundle.cty_loaded && spot_feed::filter_uses_geography(path) {
-                        let problem = format!(
-                            "spot filter {} has continent, zone or entity rules, but there is \
-                             no cty.dat: those rules cannot work (an allow list hides every spot)",
-                            path.display()
-                        );
-                        tracing::warn!("{problem}");
-                        problems.push(problem);
-                    }
-                    for key in spot_feed::unknown_filter_keys(path) {
-                        let problem =
-                            format!("spot filter {}: unknown key \"{key}\" is ignored", path.display());
-                        tracing::warn!("{problem}");
-                        problems.push(problem);
-                    }
+                self.cty_loaded = bundle.cty_loaded;
+                self.filter_control = bundle.filter_control;
+                self.spot_filter = bundle.spot_filter;
+                if let Some(problem) = bundle.spot_filter_problem {
+                    problems.insert(0, format!("{problem}. No cluster spots are shown: choose another filter in the Spots panel, or fix the file and press Reload"));
                 }
+                problems.extend(self.spot_filter_cautions());
+                self.spot_filters = super::spot_filter::choices(
+                    super::spot_filter::directory(bundle.config.dxcluster.filter_dir.as_deref()).as_deref(),
+                    self.spot_filter.as_deref(),
+                );
                 if let Some(first) = problems.into_iter().next() {
                     self.warn(first);
                 }
@@ -580,6 +572,28 @@ impl App {
             }
             Message::SpotEvent(SpotEvent::Error { message }) => {
                 tracing::warn!(error = %message, "spot feed error");
+                Task::none()
+            }
+            Message::SpotEvent(SpotEvent::FilterChanged { filter }) => {
+                // Everything on screen passed the old filter. POTA spots
+                // are kept: the filter never applied to them.
+                self.spots.clear();
+                self.spot_filter = filter;
+                self.rescan_spot_filters();
+                let name = match &self.spot_filter {
+                    Some(path) => super::spot_filter::FilterChoice::for_path(path).label,
+                    None => "none".to_string(),
+                };
+                match self.spot_filter_cautions().into_iter().next() {
+                    Some(caution) => self.warn(caution),
+                    None => self.say(format!("spot filter: {name}. Cluster spots cleared; reconnecting")),
+                }
+                self.save_panel_layout()
+            }
+            Message::SpotFilterPicked(choice) => self.switch_spot_filter(choice.path),
+            Message::SpotFilterReload => self.switch_spot_filter(self.spot_filter.clone()),
+            Message::SpotFiltersOpened => {
+                self.rescan_spot_filters();
                 Task::none()
             }
             Message::PotaSpots(spots) => {
@@ -1292,6 +1306,54 @@ impl App {
         [&mut self.panels, &mut self.qsl_panels, &mut self.logbook_panels]
     }
 
+    /// Asks the feed to switch to `path` (`None` for no filter). A file
+    /// that cannot be used is reported and the filter in force stays.
+    /// The switch itself lands as `SpotEvent::FilterChanged`.
+    fn switch_spot_filter(&mut self, path: Option<std::path::PathBuf>) -> Task<Message> {
+        let Some(control) = &self.filter_control else {
+            return Task::none();
+        };
+        if let Err(e) = control.set_filter(path) {
+            self.fail(format!("{e}. The spot filter was not changed"));
+        }
+        Task::none()
+    }
+
+    fn rescan_spot_filters(&mut self) {
+        let configured = self.config.as_ref().and_then(|c| c.dxcluster.filter_dir.clone());
+        self.spot_filters = super::spot_filter::choices(
+            super::spot_filter::directory(configured.as_deref()).as_deref(),
+            self.spot_filter.as_deref(),
+        );
+    }
+
+    /// Things about the filter in force that will not do what its
+    /// author meant, though it loads.
+    fn spot_filter_cautions(&self) -> Vec<String> {
+        let Some(path) = &self.spot_filter else {
+            return Vec::new();
+        };
+        let mut cautions = Vec::new();
+        // Continent, zone and entity rules need the country file;
+        // without it an allow list hides every spot.
+        if !self.cty_loaded && spot_feed::filter_uses_geography(path) {
+            cautions.push(format!(
+                "spot filter {} has continent, zone or entity rules, but there is no cty.dat: \
+                 those rules cannot work (an allow list hides every spot)",
+                path.display()
+            ));
+        }
+        // A key dxfeed doesn't know is ignored silently, which looks
+        // exactly like a filter that isn't working.
+        for key in spot_feed::unknown_filter_keys(path) {
+            cautions.push(format!("spot filter {}: unknown key \"{key}\" is ignored", path.display()));
+        }
+        for caution in &cautions {
+            tracing::warn!("{caution}");
+        }
+        cautions
+    }
+
     pub(super) fn save_panel_layout(&self) -> Task<Message> {
         // A theme under edit has no name to come back to.
         if self.theme_editor.is_some() {
@@ -1304,6 +1366,7 @@ impl App {
             font_scale: Some(self.font_scale),
             theme: Some(self.theme.to_string()),
             pota: Some(self.pota_on),
+            spot_filter: Some(super::spot_filter::to_saved(self.spot_filter.as_deref())),
         };
         Task::perform(save_layout(ui), |()| Message::LayoutSaveCompleted)
     }

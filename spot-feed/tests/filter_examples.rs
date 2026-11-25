@@ -83,7 +83,7 @@ fn shown_from(path: &std::path::Path, lines: &[(usize, String)], cty: bool) -> B
         .unwrap_or_else(|e| panic!("{example}: {e}"))
         .validate_and_compile()
         .unwrap_or_else(|e| panic!("{example}: {e:?}"));
-    let entities = cty.then(|| spot_feed::entity_resolver(Box::new(MiniCty)));
+    let entities = cty.then(|| spot_feed::entity_resolver(std::sync::Arc::new(MiniCty)));
     let mut aggregator = Aggregator::new(filter, None, AggregatorConfig::default(), entities, None);
 
     let mut calls = BTreeSet::new();

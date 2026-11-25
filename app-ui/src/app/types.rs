@@ -90,4 +90,12 @@ pub struct BootBundle {
     pub backups: Option<crate::app::backup::Backups>,
     /// Whether cty.dat was found and loaded.
     pub cty_loaded: bool,
+    /// Switches the cluster feed's filter; `None` when no feed runs.
+    pub filter_control: Option<spot_feed::FilterControl>,
+    /// The spot filter in force: the operator's last choice, or
+    /// `[dxcluster] filter_file` if they have never made one.
+    pub spot_filter: Option<std::path::PathBuf>,
+    /// What is wrong with that filter file, if it could not be used. No
+    /// cluster spots are shown until another is chosen.
+    pub spot_filter_problem: Option<String>,
 }

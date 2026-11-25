@@ -77,15 +77,32 @@ pub(super) async fn boot_app() -> Result<BootBundle, String> {
         "active operating location"
     );
 
-    let spots_active = if let Some(feed_cfg) = build_spot_feed_config(&config.dxcluster) {
+    // Loaded here, ahead of the spot feed, because it remembers which
+    // spot filter was last chosen. (std::fs is cheap enough to do inside
+    // the async boot.)
+    let panel_layout = load_layout();
+    let spot_filter = match panel_layout.as_ref().and_then(|saved| saved.spot_filter.as_deref()) {
+        Some(saved) => super::spot_filter::from_saved(saved),
+        None => config.dxcluster.filter_file.clone(),
+    };
+    let mut filter_control = None;
+    let mut spot_filter_problem = None;
+
+    let spots_active = if let Some(mut feed_cfg) = build_spot_feed_config(&config.dxcluster) {
+        feed_cfg.filter_path = spot_filter.clone();
         // The country file also serves the spot filter's continent,
         // zone and entity rules. Without one those rules have nothing
         // to go on, so none is passed and the caller is warned.
-        let entities: Option<Box<dyn spot_feed::EntityLookup>> =
-            cty_loaded.then(|| Box::new(CountryFile(resolver.clone())) as _);
+        let entities: Option<Arc<dyn spot_feed::EntityLookup>> =
+            cty_loaded.then(|| Arc::new(CountryFile(resolver.clone())) as _);
         match spawn_spot_feed(&feed_cfg, entities).await {
-            Ok(rx) => {
+            Ok((rx, control, problem)) => {
                 let _ = SPOT_RX.set(Mutex::new(Some(rx)));
+                filter_control = Some(control);
+                if let Some(problem) = problem {
+                    tracing::warn!(error = %problem, "spot filter unusable; no cluster spots shown");
+                    spot_filter_problem = Some(problem.to_string());
+                }
                 tracing::info!(
                     sources = feed_cfg.sources.len(),
                     "dxcluster spot feed started"
@@ -192,11 +209,8 @@ pub(super) async fn boot_app() -> Result<BootBundle, String> {
         (false, None, None)
     };
 
-    // Best-effort layout restoration: None falls back to the default
-    // split in `App::init`. We do this synchronously inside the async
-    // boot since std::fs::read_to_string is cheap and avoids a separate
-    // await point in update().
-    let panel_layout = load_layout();
+    // (The saved layout was loaded above; `None` falls back to the
+    // default split in `App::init`.)
 
     // Silent until switched on: no request reaches pota.app while off.
     let pota_on = panel_layout
@@ -234,6 +248,9 @@ pub(super) async fn boot_app() -> Result<BootBundle, String> {
         panel_layout,
         backups,
         cty_loaded,
+        filter_control,
+        spot_filter,
+        spot_filter_problem,
     })
 }
 
