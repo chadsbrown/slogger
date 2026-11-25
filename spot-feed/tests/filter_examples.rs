@@ -26,7 +26,46 @@ fn line(spotter: &str, khz: &str, dx: &str, comment: &str) -> String {
 /// The DX calls the Spots panel would show after these lines arrive,
 /// each from cluster node `source` (0 is the first in config.toml).
 fn shown(example: &str, lines: &[(usize, String)]) -> BTreeSet<String> {
-    shown_from(&examples_dir().join(format!("{example}.json")), lines)
+    shown_from(&examples_dir().join(format!("{example}.json")), lines, false)
+}
+
+/// The same with a country file loaded, as slogger has when cty.dat is
+/// in its data folder.
+fn shown_with_cty(example: &str, lines: &[(usize, String)]) -> BTreeSet<String> {
+    shown_from(&examples_dir().join(format!("{example}.json")), lines, true)
+}
+
+/// A few entities, as cty.dat describes them.
+struct MiniCty;
+
+impl spot_feed::EntityLookup for MiniCty {
+    fn entity(&self, call: &str) -> Option<spot_feed::Entity> {
+        let call = call.split('-').next().unwrap_or(call);
+        let (name, continent, cq, itu, prefix) = match call {
+            c if c.starts_with("JA") => ("Japan", "AS", 25, 45, "JA"),
+            c if c.starts_with("DL") => ("Fed. Rep. of Germany", "EU", 14, 28, "DL"),
+            c if c.starts_with("VE") => ("Canada", "NA", 5, 9, "VE"),
+            c if c.starts_with("VK") => ("Australia", "OC", 30, 59, "VK"),
+            c if c.starts_with("PY") => ("Brazil", "SA", 11, 15, "PY"),
+            c if c.starts_with('G') => ("England", "EU", 14, 27, "G"),
+            c if c.starts_with(['K', 'W', 'N']) => ("United States", "NA", 5, 8, "K"),
+            _ => return None,
+        };
+        Some(spot_feed::Entity {
+            name: name.into(),
+            continent: continent.into(),
+            cq_zone: Some(cq),
+            itu_zone: Some(itu),
+            prefix: prefix.into(),
+        })
+    }
+}
+
+fn shown_by_with_cty(json: &str, lines: &[(usize, String)]) -> BTreeSet<String> {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("filter.json");
+    std::fs::write(&path, json).unwrap();
+    shown_from(&path, lines, true)
 }
 
 /// The same, for filter JSON given inline.
@@ -34,17 +73,18 @@ fn shown_by(json: &str, lines: &[(usize, String)]) -> BTreeSet<String> {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("filter.json");
     std::fs::write(&path, json).unwrap();
-    shown_from(&path, lines)
+    shown_from(&path, lines, false)
 }
 
-fn shown_from(path: &std::path::Path, lines: &[(usize, String)]) -> BTreeSet<String> {
+fn shown_from(path: &std::path::Path, lines: &[(usize, String)], cty: bool) -> BTreeSet<String> {
     let example = path.display();
     assert_eq!(spot_feed::unknown_filter_keys(path), Vec::<String>::new(), "{example}");
     let filter = spot_feed::load_filter_file(path)
         .unwrap_or_else(|e| panic!("{example}: {e}"))
         .validate_and_compile()
         .unwrap_or_else(|e| panic!("{example}: {e:?}"));
-    let mut aggregator = Aggregator::new(filter, None, AggregatorConfig::default(), None, None);
+    let entities = cty.then(|| spot_feed::entity_resolver(Box::new(MiniCty)));
+    let mut aggregator = Aggregator::new(filter, None, AggregatorConfig::default(), entities, None);
 
     let mut calls = BTreeSet::new();
     for (source, text) in lines {
@@ -137,27 +177,103 @@ fn every_example_file_is_covered_here() {
             "12-one-cluster-only",
             "13-contest-weekend",
             "14-dx-evening",
+            "15-spotters-on-my-continent",
+            "16-dx-outside-my-continent",
+            "17-zones-and-entities",
+            "18-cw-dx-heard-near-me",
         ]
     );
 }
 
-/// What the guide says about the parts of a filter file that slogger
-/// cannot act on, because it gives dxfeed no country or callbook data.
+/// Who spotted whom: the DX call names the pair, spotter first.
+fn worldwide() -> Vec<(usize, String)> {
+    [
+        line("W3LPL", "14025.0", "JA1NA", ""),          // US spots Japan
+        line("K3LR-#", "14027.0", "DL1NA", "CW 20 dB 25 WPM CQ"), // US skimmer spots Germany
+        line("VE3EJ", "14029.0", "G4NA", ""),           // Canada spots England
+        line("W3LPL", "14031.0", "K1NA", ""),           // US spots US
+        line("DL8XYZ", "14033.0", "JA2EU", ""),         // Germany spots Japan
+        line("G3ABC", "14035.0", "W1EU", ""),           // England spots US
+        line("JA7XYZ", "14037.0", "VK2AS", ""),         // Japan spots Australia
+        line("W3LPL", "14039.0", "ZZ9NA", ""),          // US spots a call not in the country file
+        line("W3LPL", "14074.0", "PY1NA", "FT8"),       // US spots Brazil on the FT8 frequency
+    ]
+    .into_iter()
+    .map(|l| (0, l))
+    .collect()
+}
+
+#[test]
+fn spotters_on_my_continent() {
+    assert_eq!(
+        shown_with_cty("15-spotters-on-my-continent", &worldwide()),
+        set(&["JA1NA", "DL1NA", "G4NA", "K1NA", "ZZ9NA", "PY1NA"])
+    );
+}
+
+#[test]
+fn dx_outside_my_continent() {
+    // A call the country file does not know passes a deny list.
+    assert_eq!(
+        shown_with_cty("16-dx-outside-my-continent", &worldwide()),
+        set(&["JA1NA", "DL1NA", "G4NA", "JA2EU", "VK2AS", "ZZ9NA", "PY1NA"])
+    );
+}
+
+#[test]
+fn zones_and_entities() {
+    // Zones 14, 15 and 25, but not England (which is in 14). A call the
+    // country file does not know fails an allow list.
+    assert_eq!(
+        shown_with_cty("17-zones-and-entities", &worldwide()),
+        set(&["JA1NA", "DL1NA", "JA2EU"])
+    );
+}
+
+#[test]
+fn cw_dx_heard_near_me() {
+    assert_eq!(
+        shown_with_cty("18-cw-dx-heard-near-me", &worldwide()),
+        set(&["JA1NA", "DL1NA", "G4NA", "ZZ9NA"])
+    );
+}
+
+#[test]
+fn geography_rules_need_the_country_file() {
+    // With no cty.dat an allow list hides everything and a deny list
+    // nothing; slogger warns at startup.
+    assert_eq!(shown("15-spotters-on-my-continent", &worldwide()).len(), 0);
+    assert_eq!(shown("16-dx-outside-my-continent", &worldwide()).len(), 9);
+    for (example, uses) in [
+        ("01-cw-only", false),
+        ("14-dx-evening", false),
+        ("15-spotters-on-my-continent", true),
+        ("16-dx-outside-my-continent", true),
+        ("17-zones-and-entities", true),
+        ("18-cw-dx-heard-near-me", true),
+    ] {
+        let path = examples_dir().join(format!("{example}.json"));
+        assert_eq!(spot_feed::filter_uses_geography(&path), uses, "{example}");
+    }
+}
+
+/// The parts of a filter file slogger cannot act on, even with a
+/// country file: it has no callbook, LoTW-user or grid data.
 #[test]
 fn rules_slogger_cannot_evaluate() {
     let everything: BTreeSet<String> = set(&HUMAN).union(&set(&SKIMMER)).cloned().collect();
     assert_eq!(shown_by("{}", &mixed()), everything);
     // An allow list on something unknown hides every spot...
     for hides_all in [
-        r#"{"geo": {"dx": {"continent_allow": ["EU"]}}}"#,
-        r#"{"geo": {"spotter": {"cq_zone_allow": [5]}}}"#,
+        r#"{"geo": {"dx": {"country_allow": ["Japan"]}}}"#,
+        r#"{"geo": {"dx": {"state_allow": ["CT"]}}}"#,
+        r#"{"geo": {"dx": {"grid_allow": {"globs": ["FN*"]}}}}"#,
         r#"{"enrichment": {"lotw": "RequireTrue"}}"#,
     ] {
-        assert_eq!(shown_by(hides_all, &mixed()), set(&[]), "{hides_all}");
+        assert_eq!(shown_by_with_cty(hides_all, &worldwide()), set(&[]), "{hides_all}");
     }
     // ...and a deny list on it hides nothing.
     for no_effect in [
-        r#"{"geo": {"dx": {"continent_deny": ["NA"]}}}"#,
         r#"{"rf": {"mode_policy": "TrustUpstream"}}"#,
         r#"{"dx": {"normalization": {"portable_policy": "StripAllAfterSlash"}}}"#,
     ] {

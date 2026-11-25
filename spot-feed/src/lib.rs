@@ -134,8 +134,86 @@ fn collect_unknown(
 
 const CHANNEL_DEPTH: usize = 256;
 
-pub async fn spawn_spot_feed(config: &SpotFeedConfig) -> Result<mpsc::Receiver<SpotEvent>, FeedError> {
+/// Where a callsign is, as the caller's country file (cty.dat) has it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Entity {
+    /// Entity name exactly as the country file spells it ("Japan",
+    /// "Fed. Rep. of Germany"). `geo.*.entity_allow` / `entity_deny`
+    /// in a filter file match against this.
+    pub name: String,
+    /// Two-letter continent: AF, AN, AS, EU, NA, OC or SA.
+    pub continent: String,
+    pub cq_zone: Option<u8>,
+    pub itu_zone: Option<u8>,
+    /// The entity's primary prefix ("JA", "DL").
+    pub prefix: String,
+}
+
+/// Looks up where a callsign is. Given to [`spawn_spot_feed`] so a
+/// filter file's `geo` rules (continent, CQ and ITU zone, entity) have
+/// something to work on, for the spotted station and the spotter alike.
+pub trait EntityLookup: Send + Sync {
+    /// `call` is upper-case and may carry a skimmer's `-#` or `-2`
+    /// suffix, or a portable prefix or suffix.
+    fn entity(&self, call: &str) -> Option<Entity>;
+}
+
+/// Adapts an [`EntityLookup`] to what dxfeed's aggregator takes.
+pub fn entity_resolver(
+    lookup: Box<dyn EntityLookup>,
+) -> Box<dyn dxfeed::resolver::entity::EntityResolver> {
+    struct Adapter(Box<dyn EntityLookup>);
+    impl dxfeed::resolver::entity::EntityResolver for Adapter {
+        fn resolve(&self, callsign: &str) -> Option<dxfeed::resolver::entity::EntityInfo> {
+            use dxfeed::domain::Continent;
+            let entity = self.0.entity(callsign)?;
+            let continent = match entity.continent.to_ascii_uppercase().as_str() {
+                "AF" => Continent::AF,
+                "AN" => Continent::AN,
+                "AS" => Continent::AS,
+                "EU" => Continent::EU,
+                "NA" => Continent::NA,
+                "OC" => Continent::OC,
+                "SA" => Continent::SA,
+                _ => Continent::Unknown,
+            };
+            Some(dxfeed::resolver::entity::EntityInfo {
+                entity_name: entity.name,
+                continent,
+                // Zone 0 does not exist, so an unknown zone matches no
+                // allow list and no deny list.
+                cq_zone: entity.cq_zone.unwrap_or(0),
+                itu_zone: entity.itu_zone.unwrap_or(0),
+                lat: 0.0,
+                lon: 0.0,
+                primary_prefix: entity.prefix,
+            })
+        }
+    }
+    Box::new(Adapter(lookup))
+}
+
+/// Whether a filter file has rules that need an [`EntityLookup`]: any
+/// `geo` allow or deny list. Without a lookup such an allow list hides
+/// every spot and a deny list hides none. False when the file cannot be
+/// read or parsed: [`load_filter_file`] reports that.
+pub fn filter_uses_geography(path: &Path) -> bool {
+    load_filter_file(path)
+        .ok()
+        .and_then(|filter| filter.validate_and_compile().ok())
+        .is_some_and(|f| f.geo.dx.has_any_filters() || f.geo.spotter.has_any_filters())
+}
+
+/// Starts the cluster feed. `entities` is the country-file lookup for a
+/// filter's `geo` rules; pass `None` when there is no country file.
+pub async fn spawn_spot_feed(
+    config: &SpotFeedConfig,
+    entities: Option<Box<dyn EntityLookup>>,
+) -> Result<mpsc::Receiver<SpotEvent>, FeedError> {
     let mut builder = dxfeed::feed::DxFeedBuilder::new();
+    if let Some(lookup) = entities {
+        builder = builder.entity_resolver(entity_resolver(lookup));
+    }
     for (i, src) in config.sources.iter().enumerate() {
         let cluster = dxfeed::source::cluster::ClusterSourceConfig::new(
             &src.host,

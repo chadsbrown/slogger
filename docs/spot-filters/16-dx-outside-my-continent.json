@@ -1,0 +1,7 @@
+{
+  "geo": {
+    "dx": {
+      "continent_deny": ["NA"]
+    }
+  }
+}

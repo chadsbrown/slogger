@@ -84,6 +84,17 @@ impl App {
                 // A filter key dxfeed doesn't know is ignored silently,
                 // which looks exactly like a filter that isn't working.
                 if let Some(path) = &bundle.config.dxcluster.filter_file {
+                    // Continent, zone and entity rules need the country
+                    // file; without it an allow list hides every spot.
+                    if !bundle.cty_loaded && spot_feed::filter_uses_geography(path) {
+                        let problem = format!(
+                            "spot filter {} has continent, zone or entity rules, but there is \
+                             no cty.dat: those rules cannot work (an allow list hides every spot)",
+                            path.display()
+                        );
+                        tracing::warn!("{problem}");
+                        problems.push(problem);
+                    }
                     for key in spot_feed::unknown_filter_keys(path) {
                         let problem =
                             format!("spot filter {}: unknown key \"{key}\" is ignored", path.display());

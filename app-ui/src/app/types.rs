@@ -88,4 +88,6 @@ pub struct BootBundle {
     pub panel_layout: Option<SavedUi>,
     /// Logbook backups; `None` when `[backup] enabled = false`.
     pub backups: Option<crate::app::backup::Backups>,
+    /// Whether cty.dat was found and loaded.
+    pub cty_loaded: bool,
 }

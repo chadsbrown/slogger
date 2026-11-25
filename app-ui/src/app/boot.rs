@@ -40,7 +40,7 @@ pub(super) async fn boot_app() -> Result<BootBundle, String> {
     let repo: Arc<dyn QsoRepository> = Arc::new(SqliteQsoRepository::new(&db));
     let station_repo: Arc<dyn StationRepository> = Arc::new(SqliteStationRepository::new(&db));
 
-    let resolver: Arc<dyn Resolver> = load_resolver(&dir);
+    let (resolver, cty_loaded) = load_resolver(&dir);
     let service = Arc::new(LogbookService::with_resolver(
         repo.clone(),
         resolver.clone(),
@@ -78,7 +78,12 @@ pub(super) async fn boot_app() -> Result<BootBundle, String> {
     );
 
     let spots_active = if let Some(feed_cfg) = build_spot_feed_config(&config.dxcluster) {
-        match spawn_spot_feed(&feed_cfg).await {
+        // The country file also serves the spot filter's continent,
+        // zone and entity rules. Without one those rules have nothing
+        // to go on, so none is passed and the caller is warned.
+        let entities: Option<Box<dyn spot_feed::EntityLookup>> =
+            cty_loaded.then(|| Box::new(CountryFile(resolver.clone())) as _);
+        match spawn_spot_feed(&feed_cfg, entities).await {
             Ok(rx) => {
                 let _ = SPOT_RX.set(Mutex::new(Some(rx)));
                 tracing::info!(
@@ -228,6 +233,7 @@ pub(super) async fn boot_app() -> Result<BootBundle, String> {
         pota_control,
         panel_layout,
         backups,
+        cty_loaded,
     })
 }
 
@@ -378,12 +384,31 @@ fn data_dir() -> Result<PathBuf, String> {
     Ok(dir)
 }
 
-fn load_resolver(dir: &std::path::Path) -> Arc<dyn Resolver> {
+/// slogger's country file as the spot feed wants it.
+struct CountryFile(Arc<dyn Resolver>);
+
+impl spot_feed::EntityLookup for CountryFile {
+    fn entity(&self, call: &str) -> Option<spot_feed::Entity> {
+        // A skimmer's "-#" or "-2" is not part of its callsign.
+        let call = call.split('-').next().unwrap_or(call);
+        let found = self.0.resolve(&radio_core::Callsign::parse(call).ok()?)?;
+        Some(spot_feed::Entity {
+            name: found.country?,
+            continent: found.continent?,
+            cq_zone: found.cq_zone,
+            itu_zone: found.itu_zone,
+            prefix: found.dxcc_prefix.unwrap_or_default(),
+        })
+    }
+}
+
+/// The callsign resolver, and whether it has a country file behind it.
+fn load_resolver(dir: &std::path::Path) -> (Arc<dyn Resolver>, bool) {
     let cty_path = dir.join("cty.dat");
     match CtyDbResolver::from_path(&cty_path) {
         Ok(r) => {
             tracing::info!(path = %cty_path.display(), "loaded cty.dat for callsign resolution");
-            Arc::new(r)
+            (Arc::new(r), true)
         }
         Err(e) => {
             tracing::warn!(
@@ -391,7 +416,7 @@ fn load_resolver(dir: &std::path::Path) -> Arc<dyn Resolver> {
                 error = %e,
                 "no cty.dat available; QSOs will not be auto-enriched with DXCC info"
             );
-            Arc::new(NoOpResolver)
+            (Arc::new(NoOpResolver), false)
         }
     }
 }
@@ -491,4 +516,31 @@ pub(super) async fn import_adif_file(
         parse_errors,
         first_errors: report.errors.into_iter().take(3).collect(),
     })
+}
+
+#[cfg(test)]
+mod country_file_tests {
+    use super::*;
+    use spot_feed::EntityLookup;
+
+    const MINI_CTY: &str = "United States:                      05:  08:  NA:   37.53:   97.00:     5.0:  K:
+    K,W,N,AA,AB,AC,AD,AE,AF,AG,AH,AI,AJ,AK,AL;
+Fed. Rep. of Germany:               14:  28:  EU:   51.00:  -10.00:    -1.0:  DL:
+    DA,DB,DC,DD,DE,DF,DG,DH,DI,DJ,DK,DL,DM,DN,DO,DP,DQ,DR;
+";
+
+    #[test]
+    fn the_spot_filter_sees_what_cty_dat_says() {
+        let cty = CountryFile(Arc::new(CtyDbResolver::from_reader(MINI_CTY.as_bytes()).unwrap()));
+        let de = cty.entity("DL1ABC").unwrap();
+        assert_eq!(
+            (de.name.as_str(), de.continent.as_str(), de.cq_zone, de.itu_zone, de.prefix.as_str()),
+            ("Fed. Rep. of Germany", "EU", Some(14), Some(28), "DL")
+        );
+        // A skimmer's suffix is not part of its call.
+        for skimmer in ["K3LR-#", "W3LPL-2", "K3LR"] {
+            assert_eq!(cty.entity(skimmer).unwrap().continent, "NA", "{skimmer}");
+        }
+        assert!(cty.entity("ZZ9ZZZ").is_none());
+    }
 }

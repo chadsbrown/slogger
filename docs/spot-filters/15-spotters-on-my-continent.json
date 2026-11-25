@@ -1,0 +1,7 @@
+{
+  "geo": {
+    "spotter": {
+      "continent_allow": ["NA"]
+    }
+  }
+}

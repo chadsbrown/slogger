@@ -1,0 +1,8 @@
+{
+  "geo": {
+    "dx": {
+      "cq_zone_allow": [14, 15, 25],
+      "entity_deny": ["England"]
+    }
+  }
+}

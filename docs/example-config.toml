@@ -163,8 +163,9 @@
 # Optional spot filter (JSON file, hand-authored). Drops spots before
 # they reach the panel. docs/spot-filters.md explains the format with
 # examples to copy (CW only, chosen bands, no FT8, humans or skimmers
-# only, watch lists, and how to combine them); the files themselves are
-# in docs/spot-filters/.
+# only, watch lists, by continent or zone, and how to combine them); the
+# files themselves are in docs/spot-filters/. Continent, zone and entity
+# rules need cty.dat in slogger's data folder.
 # filter_file = "/home/me/.config/slogger/spot-filter.json"
 
 

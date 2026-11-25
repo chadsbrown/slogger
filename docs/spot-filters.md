@@ -60,6 +60,7 @@ The sections that work in slogger:
 | `content` | the spot's comment text |
 | `correlation` | how many different stations have spotted it |
 | `skimmer` | signal strength, speed and CQ, for skimmer spots only |
+| `geo` | continent, CQ zone, ITU zone and entity, of the spotted station and of the spotter (needs `cty.dat`) |
 
 Values you will need:
 
@@ -67,6 +68,8 @@ Values you will need:
 | --- | --- |
 | Bands | `"B160"` `"B80"` `"B60"` `"B40"` `"B30"` `"B20"` `"B17"` `"B15"` `"B12"` `"B10"` `"B6"` `"B2"` |
 | Modes | `"CW"` `"SSB"` `"DIG"` `"AM"` `"FM"` `"Unknown"` |
+| Continents | `"AF"` `"AN"` `"AS"` `"EU"` `"NA"` `"OC"` `"SA"` |
+| Zones | plain numbers: `[14, 15]` |
 | Frequencies | whole hertz, as a `[low, high]` pair, both ends included: `[14000000, 14030000]` |
 
 Spelling and capitals matter: `"20m"` or `"cw"` is an error and the feed
@@ -415,6 +418,96 @@ slogger names the nodes in `[dxcluster] sources` by their position:
 does the opposite. Useful when one of your nodes is a firehose and you
 want to see what the other one alone gives you.
 
+## By geography
+
+These use slogger's country file. Put a current `cty.dat` (the Big CTY
+version from country-files.com) in slogger's data folder, the one that
+holds `slogger.sqlite`:
+
+| | Data folder |
+| --- | --- |
+| Windows | `%LOCALAPPDATA%\slogger` |
+| Linux | `~/.local/share/slogger` |
+
+Without it these rules cannot work, and slogger warns at startup: an
+allow list would hide every spot and a deny list none.
+
+The `geo` section has two halves with the same settings: `dx` is about
+the station that was spotted, `spotter` about whoever sent the spot.
+
+### 15. Only spots from spotters on your continent
+
+[`15-spotters-on-my-continent.json`](spot-filters/15-spotters-on-my-continent.json)
+
+```json
+{
+  "geo": {
+    "spotter": {
+      "continent_allow": ["NA"]
+    }
+  }
+}
+```
+
+| Line | Meaning |
+| --- | --- |
+| `"geo"` | the geography section |
+| `"spotter"` | rules about where the spotter is |
+| `"continent_allow": ["NA"]` | show a spot only if it was sent from North America |
+
+The most useful geography filter: a station heard in Europe is often
+inaudible in North America, and this hides those. It applies to skimmers
+too, by their callsign.
+
+### 16. Only DX outside your continent
+
+[`16-dx-outside-my-continent.json`](spot-filters/16-dx-outside-my-continent.json)
+
+```json
+{
+  "geo": {
+    "dx": {
+      "continent_deny": ["NA"]
+    }
+  }
+}
+```
+
+| Line | Meaning |
+| --- | --- |
+| `"dx"` | rules about where the spotted station is |
+| `"continent_deny": ["NA"]` | hide spots of North American stations |
+
+A callsign the country file cannot place passes a deny list (it is not
+known to be in North America) but fails an allow list (it is not known
+to be anywhere you asked for).
+
+### 17. Zones and entities
+
+[`17-zones-and-entities.json`](spot-filters/17-zones-and-entities.json)
+
+```json
+{
+  "geo": {
+    "dx": {
+      "cq_zone_allow": [14, 15, 25],
+      "entity_deny": ["England"]
+    }
+  }
+}
+```
+
+| Line | Meaning |
+| --- | --- |
+| `"cq_zone_allow": [14, 15, 25]` | show only stations in CQ zones 14, 15 or 25 |
+| `"entity_deny": ["England"]` | but not England, although it is in zone 14 |
+
+`itu_zone_allow` and `itu_zone_deny` work the same way. An entity name
+must be spelt exactly as `cty.dat` spells it, capitals included: it is
+the text before the first colon on the entity's line in that file. Some
+are not what you might guess: `"United States"`, `"Fed. Rep. of Germany"`,
+`"European Russia"`, `"Asiatic Russia"`.
+
 ## Mixing them
 
 Combining filters is a matter of putting the sections side by side in
@@ -493,6 +586,37 @@ A spot has to pass all four sections. A CW station on 20 m spotted by
 one person stays hidden until a second person spots it; a station on
 80 m never appears, however many people spot it.
 
+### 18. CW DX that someone near you can hear
+
+[`18-cw-dx-heard-near-me.json`](spot-filters/18-cw-dx-heard-near-me.json)
+
+```json
+{
+  "rf": {
+    "mode_allow": ["CW"],
+    "freq_deny_hz": [ ... the list from example 3 ... ]
+  },
+  "geo": {
+    "dx": {
+      "continent_deny": ["NA"]
+    },
+    "spotter": {
+      "continent_allow": ["NA"]
+    }
+  }
+}
+```
+
+| Part | From | Effect |
+| --- | --- | --- |
+| `rf` | example 4 | CW, without the FT8 frequencies |
+| `geo.dx` | example 16 | the station is outside North America |
+| `geo.spotter` | example 15 | and it was heard in North America |
+
+A Japanese station spotted from the US is shown. The same station
+spotted from Germany is not, and neither is a US station spotted from
+the US. Change both `"NA"` to your own continent.
+
 ### A way to build your own
 
 1. Start with the smallest file that does the main thing you want,
@@ -513,18 +637,15 @@ error at startup, it gives the line and column.
 ## Parts of the filter format that do not work in slogger
 
 The filter format comes from the spot library slogger uses, and has
-sections slogger cannot act on yet, because it does not give the library
-country or callbook data. Avoid them:
+settings slogger cannot act on, because it has no callbook, LoTW-user,
+state or grid data to give the library. Avoid them:
 
 | Setting | What happens in slogger |
 | --- | --- |
-| `geo` allow lists (`continent_allow`, `cq_zone_allow`, `country_allow`, ...) | **hides every spot** |
-| `geo` deny lists | no effect |
+| `geo` `country_allow`, `state_allow`, `grid_allow` | **hides every spot** (use `entity_allow` for countries) |
+| `geo` `country_deny`, `state_deny`, `grid_deny` | no effect |
 | `enrichment` (`lotw`, `in_callbook`, `membership`, ...) set to require something | **hides every spot** |
 | `rf.mode_policy`, `dx.normalization`, `spotter.callsign.normalization` | no effect |
-
-So filtering by continent, zone or country ("only DX outside North
-America", "only spots from European spotters") is not possible today.
 
 Two top-level settings are best left alone: `max_age_secs` (default 900)
 and `freq_sanity_hz` (default 1.8 to 54 MHz). The second one means spots
