@@ -1,0 +1,14 @@
+{
+  "dx": {
+    "deny": {
+      "globs": ["W1AW", "W1AW/*", "*/B"]
+    }
+  },
+  "spotter": {
+    "callsign": {
+      "deny": {
+        "globs": ["N0CALL", "EA5WU-#"]
+      }
+    }
+  }
+}

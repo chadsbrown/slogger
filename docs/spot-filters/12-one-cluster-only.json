@@ -1,0 +1,5 @@
+{
+  "spotter": {
+    "source_allow": ["cluster-0"]
+  }
+}

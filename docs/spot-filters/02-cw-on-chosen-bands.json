@@ -1,0 +1,6 @@
+{
+  "rf": {
+    "mode_allow": ["CW"],
+    "band_allow": ["B40", "B20", "B15", "B10"]
+  }
+}

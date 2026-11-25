@@ -1,0 +1,10 @@
+{
+  "spotter": {
+    "allow_human": false
+  },
+  "skimmer": {
+    "require_cq": true,
+    "snr_db": [10, 127],
+    "wpm": [15, 35]
+  }
+}

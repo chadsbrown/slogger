@@ -1,0 +1,5 @@
+{
+  "correlation": {
+    "min_unique_originators": 2
+  }
+}

@@ -160,8 +160,11 @@
 #     { host = "n1nr.org",     port = 7300 },
 # ]
 
-# Optional dxfeed filter (JSON file, hand-authored). See dxfeed docs for
-# the schema. Drops spots before they reach the panel.
+# Optional spot filter (JSON file, hand-authored). Drops spots before
+# they reach the panel. docs/spot-filters.md explains the format with
+# examples to copy (CW only, chosen bands, no FT8, humans or skimmers
+# only, watch lists, and how to combine them); the files themselves are
+# in docs/spot-filters/.
 # filter_file = "/home/me/.config/slogger/spot-filter.json"
 
 

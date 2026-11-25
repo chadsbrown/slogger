@@ -1,0 +1,9 @@
+{
+  "content": {
+    "comment_deny": {
+      "globs": ["*pirate*", "*test*"],
+      "regexes": ["\\bFT[48]\\b"],
+      "case_insensitive": true
+    }
+  }
+}
