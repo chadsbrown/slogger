@@ -204,6 +204,35 @@
 
 
 # ============================================================
+# [backup] — automatic logbook backups
+# ============================================================
+#
+# On by default, with no configuration: slogger keeps backups in a
+# "backups" folder beside the logbook database. Each backup is two files
+# with the UTC time in their names:
+#
+#   slogger-20261124-153000Z.sqlite   a complete copy of the logbook
+#   slogger-20261124-153000Z.adi      every QSO as ADIF, for any logger
+#
+# One is made at startup when the newest is `interval_days` old, before
+# every ADIF import, and whenever you press Back up now (Logbook tab ->
+# Tools). The default folder is on the same disk as the logbook, so it
+# guards against mistakes and corruption but not against losing the
+# disk: point `directory` at another drive or a synced folder for that.
+# If the folder can't be written, a warning stays in the bottom bar.
+# config.toml itself is not backed up (it holds your passwords).
+#
+# To restore a backup, see docs/backup.md.
+
+[backup]
+# enabled = false                  # default true
+# directory = '/mnt/usb/slogger'   # on Windows: 'D:\slogger-backups'
+#                                  # (single quotes, so backslashes are literal)
+# interval_days = 7                # default 7; 0 = at every start
+# keep = 10                        # default 10; older backups are deleted
+
+
+# ============================================================
 # Sync services
 # ============================================================
 #

@@ -16,5 +16,6 @@ tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+tempfile.workspace = true
 station-resolver.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

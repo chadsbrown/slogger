@@ -109,6 +109,17 @@ LoTW uploads of its QSOs are signed with:
 on demand from the QSO log. No materialized table; recomputed every
 refresh. Per-band DXCC breakdown also produced.
 
+### Backups
+
+On unless `[backup] enabled = false`. `Backups::run` writes a snapshot of
+the database (`VACUUM INTO`, safe while in use) and a full ADIF export to
+the backup folder (default `backups` beside the database) under
+`slogger-<UTC time>` names, then deletes all but the newest `keep`. It
+runs at startup when the newest snapshot is `interval_days` old, before
+every ADIF import (a failed backup stops the import), and from **Back up
+now** in the Logbook Tools panel. The last backup time is read from the
+file names. Restore is manual: `docs/backup.md`.
+
 ### Search / bulk
 
 `LogbookService::search_qsos`, `search_full_qsos`, `count_matching`, and

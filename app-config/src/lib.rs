@@ -35,6 +35,7 @@ pub struct Config {
     pub so2r: So2rConfig,
     pub condx: CondXConfig,
     pub pota: PotaConfig,
+    pub backup: BackupConfig,
 }
 
 impl Config {
@@ -187,6 +188,40 @@ pub struct CondXConfig {
     /// Seconds between polls. Default 3600 (hamqsl updates about
     /// hourly); values below 60 are raised to 60.
     pub refresh_interval_secs: Option<u64>,
+}
+
+/// Automatic backups of the logbook. On unless switched off.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BackupConfig {
+    /// Default true. `false` stops every automatic backup and disables
+    /// the Back up now button.
+    pub enabled: bool,
+    /// Where backups are written. Default: a `backups` folder beside
+    /// the logbook database.
+    pub directory: Option<PathBuf>,
+    /// A backup is made at startup when the newest one is at least this
+    /// many days old. Default 7; 0 backs up at every start.
+    pub interval_days: Option<u32>,
+    /// How many backups to keep; older ones are deleted. Default 10,
+    /// minimum 1.
+    pub keep: Option<usize>,
+}
+
+impl Default for BackupConfig {
+    fn default() -> Self {
+        Self { enabled: true, directory: None, interval_days: None, keep: None }
+    }
+}
+
+impl BackupConfig {
+    pub fn interval_days(&self) -> u32 {
+        self.interval_days.unwrap_or(7)
+    }
+
+    pub fn keep(&self) -> usize {
+        self.keep.unwrap_or(10).max(1)
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -523,6 +558,12 @@ mod tests {
                 modes: vec!["x".into()],
                 refresh_interval_secs: Some(1),
             },
+            backup: BackupConfig {
+                enabled: true,
+                directory: p(),
+                interval_days: Some(1),
+                keep: Some(1),
+            },
         }
     }
 
@@ -802,6 +843,20 @@ mod tests {
         assert_eq!(unknown_keys_in(text), ["dxcluster.filter", "dxcluster.sources.0.filter_file"]);
         assert!(unknown_keys_in("[dxcluster]\nfilter_file = \"a.json\"\n").is_empty());
         assert_eq!(unknown_keys_in("filter_file = \"a.json\"\n[dxcluster]\n"), ["filter_file"]);
+    }
+
+    #[test]
+    fn backups_are_on_unless_switched_off() {
+        let cfg: Config = toml::from_str("").unwrap();
+        assert!(cfg.backup.enabled);
+        assert_eq!((cfg.backup.interval_days(), cfg.backup.keep()), (7, 10));
+        let cfg: Config =
+            toml::from_str("[backup]\ndirectory = 'D:\\logs'\ninterval_days = 1\nkeep = 0\n").unwrap();
+        assert!(cfg.backup.enabled);
+        assert_eq!(cfg.backup.directory.as_deref(), Some(Path::new("D:\\logs")));
+        assert_eq!((cfg.backup.interval_days(), cfg.backup.keep()), (1, 1));
+        let cfg: Config = toml::from_str("[backup]\nenabled = false\n").unwrap();
+        assert!(!cfg.backup.enabled);
     }
 
     #[test]

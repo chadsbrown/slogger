@@ -49,6 +49,11 @@ pub struct App {
 
     pub(super) adif_path: String,
     pub(super) importing: bool,
+    /// Logbook backups; `None` until boot, or when switched off.
+    pub(super) backups: Option<super::backup::Backups>,
+    /// When the newest backup in the folder was made.
+    pub(super) last_backup: Option<chrono::DateTime<chrono::Utc>>,
+    pub(super) backing_up: bool,
     pub(super) syncing: bool,
 
     pub(super) station_locations: Vec<StationLocation>,
@@ -211,6 +216,9 @@ impl App {
             rst_rcvd: "59".into(),
             adif_path: String::new(),
             importing: false,
+            backups: None,
+            last_backup: None,
+            backing_up: false,
             syncing: false,
             editing_qso: None,
             qso_detail: None,

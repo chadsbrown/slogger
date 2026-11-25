@@ -27,6 +27,8 @@ pub enum Message {
     AdifPathChanged(String),
     ImportPressed,
     ImportFinished(Result<ImportSummary, String>),
+    BackupPressed,
+    BackupFinished(Result<super::backup::BackupDone, String>),
     ServicesUpdatePressed,
     ServicesUpdateFinished(MultiUpdateSummary),
     /// Read everything at LoTW again, ignoring where the last sync left

@@ -419,6 +419,32 @@ impl App {
         .into()
     }
 
+    /// When the log was last backed up and where, with a button to do
+    /// it now.
+    fn backup_controls(&self) -> Element<'_, Message> {
+        let Some(backups) = &self.backups else {
+            return text("Backups are switched off ([backup] enabled = false in config.toml).")
+                .size(11)
+                .into();
+        };
+        let last = match self.last_backup {
+            Some(at) => format!("Last backup: {}", at.format("%Y-%m-%d %H:%M UTC")),
+            None => "No backup yet".to_string(),
+        };
+        let btn = button(text(if self.backing_up { "Backing up…" } else { "Back up now" }));
+        let btn = if self.backing_up || self.importing {
+            btn
+        } else {
+            btn.on_press(Message::BackupPressed)
+        };
+        column![
+            row![text(last).width(Length::Fill), btn].spacing(8).align_y(iced::Alignment::Center),
+            text(format!("Folder: {}", backups.directory.display())).size(11),
+        ]
+        .spacing(4)
+        .into()
+    }
+
     /// Tools pane — ADIF import path + Import button. Future: Export
     /// selected results to ADIF (operates on the Grid pane's checked
     /// rows via `export_adif`).
@@ -444,6 +470,9 @@ impl App {
             .align_y(iced::Alignment::Center),
             text("(ADIF export from selected results: coming next)")
                 .size(11),
+            rule::horizontal(1),
+            text("Backup").size(13),
+            self.backup_controls(),
         ]
         .spacing(8)
         .into()

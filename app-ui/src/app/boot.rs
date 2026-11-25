@@ -55,6 +55,18 @@ pub(super) async fn boot_app() -> Result<BootBundle, String> {
         );
     }
 
+    let backups = super::backup::Backups::from_config(
+        &config.backup,
+        &dir,
+        db.clone(),
+        service.clone(),
+        station_repo.clone(),
+    );
+    match &backups {
+        Some(b) => tracing::info!(directory = %b.directory.display(), "logbook backups on"),
+        None => tracing::info!("logbook backups switched off in config"),
+    }
+
     let station_locations = station_repo
         .list_locations()
         .await
@@ -215,6 +227,7 @@ pub(super) async fn boot_app() -> Result<BootBundle, String> {
         pota_on,
         pota_control,
         panel_layout,
+        backups,
     })
 }
 

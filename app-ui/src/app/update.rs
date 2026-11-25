@@ -119,11 +119,24 @@ impl App {
                 };
                 // Land with the cursor in the Call field: the operator can
                 // start typing the moment the window appears.
+                // A backup when the newest is older than the configured
+                // interval (or there is none yet).
+                self.last_backup = bundle.backups.as_ref().and_then(|b| b.latest());
+                let backup = match &bundle.backups {
+                    Some(backups) if backups.due(Utc::now()) => {
+                        self.backing_up = true;
+                        let backups = backups.clone();
+                        Task::perform(async move { backups.run().await }, Message::BackupFinished)
+                    }
+                    _ => Task::none(),
+                };
+                self.backups = bundle.backups;
                 Task::batch([
                     Task::perform(
                         refresh(bundle.repo, bundle.station_repo, bundle.service),
                         Message::Refreshed,
                     ),
+                    backup,
                     confirmations,
                     focus_call(),
                 ])
@@ -407,10 +420,48 @@ impl App {
                 }
                 self.importing = true;
                 self.say(format!("importing {path}…"));
-                Task::perform(import_adif_file(svc, path), Message::ImportFinished)
+                // An import can add thousands of QSOs and there is no
+                // undo, so the log is backed up first; if that fails the
+                // import does not run.
+                let backups = self.backups.clone();
+                Task::perform(
+                    async move {
+                        if let Some(backups) = backups {
+                            backups.run().await.map_err(|e| {
+                                format!("the backup before it failed, so nothing was imported: {e}")
+                            })?;
+                        }
+                        import_adif_file(svc, path).await
+                    },
+                    Message::ImportFinished,
+                )
+            }
+            Message::BackupPressed => {
+                let Some(backups) = self.backups.clone() else {
+                    return Task::none();
+                };
+                self.backing_up = true;
+                self.say("backing up the logbook…");
+                Task::perform(async move { backups.run().await }, Message::BackupFinished)
+            }
+            Message::BackupFinished(Ok(done)) => {
+                self.backing_up = false;
+                self.last_backup = Some(done.at);
+                self.say(format!("logbook backed up ({} QSOs) to {}", done.qsos, done.snapshot.display()));
+                Task::none()
+            }
+            Message::BackupFinished(Err(e)) => {
+                self.backing_up = false;
+                // Stays in the bar until dismissed: a log that is not
+                // being backed up should not go unnoticed.
+                self.warn(format!("logbook backup failed: {e}"));
+                Task::none()
             }
             Message::ImportFinished(Ok(summary)) => {
                 self.importing = false;
+                if let Some(backups) = &self.backups {
+                    self.last_backup = backups.latest();
+                }
                 let mut msg = format!(
                     "import: created {} / duplicates {} / skipped {} / parse-errors {}",
                     summary.created, summary.duplicates, summary.skipped, summary.parse_errors

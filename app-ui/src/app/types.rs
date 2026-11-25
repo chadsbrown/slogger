@@ -86,4 +86,6 @@ pub struct BootBundle {
     /// present. `None` means nothing has been saved yet (or the file was
     /// unreadable) — the caller keeps the defaults.
     pub panel_layout: Option<SavedUi>,
+    /// Logbook backups; `None` when `[backup] enabled = false`.
+    pub backups: Option<crate::app::backup::Backups>,
 }
