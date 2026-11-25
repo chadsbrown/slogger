@@ -306,8 +306,23 @@ impl App {
                 .find(|choice| choice.path == self.spot_filter)
                 .cloned();
             let reload = button(text("Reload").size(12)).padding([2, 8]).style(theme::push_button);
+            // Where the list's files come from: the first thing to
+            // check when a file that was copied in does not show up.
+            let folder = super::super::spot_filter::directory(
+                self.config.as_ref().and_then(|c| c.dxcluster.filter_dir.as_deref()),
+            )
+            .map(|dir| dir.display().to_string())
+            .unwrap_or_else(|| "(no config folder on this system)".to_string());
+            let hint = container(
+                text(format!(
+                    "Filter files are read from\n{folder}\nOne .json file per filter. The list is re-read each time it is opened."
+                ))
+                .size(12),
+            )
+            .padding(6)
+            .style(theme::panel_style);
             row![
-                label("Filter"),
+                tooltip(label("Filter"), hint, tooltip::Position::Bottom),
                 pick_list(self.spot_filters.as_slice(), current, Message::SpotFilterPicked)
                     .on_open(Message::SpotFiltersOpened)
                     .text_size(12)
